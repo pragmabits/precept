@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -58,8 +59,44 @@ func TestHelp(t *testing.T) {
 	if code != exitClean {
 		t.Errorf("exit = %d, want %d", code, exitClean)
 	}
-	if !strings.Contains(stderr, "-c, --config") {
-		t.Errorf("usage = %q, want it to name -c, --config", stderr)
+	for _, flag := range []string{"-c, --config", "-v, --version"} {
+		if !strings.Contains(stderr, flag) {
+			t.Errorf("usage = %q, want it to name %s", stderr, flag)
+		}
+	}
+}
+
+func TestVersionFlag(t *testing.T) {
+	for _, spelling := range []string{"-v", "--v", "--version", "-version"} {
+		t.Run(spelling, func(t *testing.T) {
+			code, stdout, stderr := execute(spelling)
+			if code != exitClean {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
+			}
+			info, _ := debug.ReadBuildInfo()
+			if want := version(info) + "\n"; stdout != want {
+				t.Errorf("stdout = %q, want %q", stdout, want)
+			}
+		})
+	}
+}
+
+func TestVersion(t *testing.T) {
+	tests := []struct {
+		build string
+		info  *debug.BuildInfo
+		want  string
+	}{
+		{build: "module version", info: built("v0.1.0+dirty"), want: "v0.1.0+dirty"},
+		{build: "no module version", info: built(""), want: "(devel)"},
+		{build: "no build information", info: nil, want: "(devel)"},
+	}
+	for _, test := range tests {
+		t.Run(test.build, func(t *testing.T) {
+			if got := version(test.info); got != test.want {
+				t.Errorf("version = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -156,6 +193,10 @@ func execute(arguments ...string) (code int, stdout, stderr string) {
 	var output, errors bytes.Buffer
 	code = run(arguments, &output, &errors)
 	return code, output.String(), errors.String()
+}
+
+func built(version string) *debug.BuildInfo {
+	return &debug.BuildInfo{Main: debug.Module{Version: version}}
 }
 
 func write(t *testing.T, content string) string {

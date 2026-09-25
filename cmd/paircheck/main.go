@@ -4,6 +4,7 @@
 //
 //	paircheck --config rules.yml ./...
 //	paircheck validate -c .golangci.yml
+//	paircheck -v
 //
 // The file holds the rules, or is a golangci-lint configuration carrying them
 // in its settings, native or as a module plugin.
@@ -18,6 +19,7 @@ import (
 	"go/types"
 	"io"
 	"os"
+	"runtime/debug"
 
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/tools/go/analysis"
@@ -47,9 +49,11 @@ const (
 
 const usage = `usage: paircheck -c file packages...
        paircheck validate -c file
+       paircheck -v
 
   -c, --config file   the rules: a YAML file, or a .golangci.yml carrying them
                       in its settings, native or as a module plugin
+  -v, --version       print the version and exit
 `
 
 func main() {
@@ -73,12 +77,20 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	var path string
 	flags.StringVar(&path, "config", "", "the rules")
 	flags.StringVar(&path, "c", "", "the rules (shorthand)")
+	var showVersion bool
+	flags.BoolVar(&showVersion, "version", false, "print the version and exit")
+	flags.BoolVar(&showVersion, "v", false, "print the version and exit (shorthand)")
 	err := flags.Parse(arguments)
 	if errors.Is(err, flag.ErrHelp) {
 		return exitClean
 	}
 	if err != nil {
 		return exitFailed
+	}
+	if showVersion {
+		info, _ := debug.ReadBuildInfo()
+		fmt.Fprintln(stdout, version(info))
+		return exitClean
 	}
 	code, err := dispatch(validating, path, flags.Args(), stdout)
 	if err != nil {
@@ -219,4 +231,14 @@ func settingsOf(document map[string]any) (any, error) {
 		return pluginSettings, nil
 	}
 	return nil, errNoSettings
+}
+
+// version is the version of the module the binary was built from, as the go
+// command recorded it: the tag it was installed at, a pseudo-version, or
+// (devel) when it recorded none.
+func version(info *debug.BuildInfo) string {
+	if info == nil || info.Main.Version == "" {
+		return "(devel)"
+	}
+	return info.Main.Version
 }

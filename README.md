@@ -132,6 +132,8 @@ configuration or the packages fail to load.
 carrying them in its settings, native or as a module plugin. Flags come before
 the packages, as in the `go` command.
 
+`-v`, `--version` prints the version the binary was built from, such as `v0.1.0`.
+
 #### Validating the rules
 
 A misspelled name matches nothing, and the analyzer cannot tell: it sees only
