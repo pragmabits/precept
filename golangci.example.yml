@@ -1,0 +1,41 @@
+# paircheck in a golangci-lint configuration, with every optional key of a rule
+# written at its default. `slot` is left out: its default is the one slot the
+# types allow. The keys are described in the README, under Rules.
+#
+#   golangci-lint-precept run -c golangci.example.yml ./...
+#   paircheck -c golangci.example.yml ./...
+version: "2"
+linters:
+  enable:
+    - paircheck
+  settings:
+    custom:
+      paircheck:
+        type: module
+        description: Reports an obligation not discharged on every path.
+        settings:
+          rules:
+            - id: transaction
+              trigger: (*database/sql.DB).Begin
+              satisfiers:
+                - (*database/sql.Tx).Commit
+                - (*database/sql.Tx).Rollback
+              open-on-error: false
+              deferred-closure: any-path
+              transfer: all
+
+            - id: file
+              trigger: os.Open
+              satisfiers:
+                - (*os.File).Close
+              open-on-error: false
+              deferred-closure: any-path
+              transfer: all
+
+            - id: lock
+              trigger: (*sync.Mutex).Lock
+              satisfiers:
+                - (*sync.Mutex).Unlock
+              open-on-error: false
+              deferred-closure: any-path
+              transfer: all
