@@ -1,8 +1,0 @@
-# The golangci-lint that `make golangci` builds with the plugins of this module,
-# from the local source, alongside the golangci-lint already installed.
-version: v2.13.2
-name: golangci-lint-precept
-plugins:
-  - module: github.com/pragmabits/precept
-    import: github.com/pragmabits/precept/plugin
-    path: .

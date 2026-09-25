@@ -148,19 +148,8 @@ Run it in CI next to the analysis.
 ### golangci-lint
 
 paircheck is available as a
-[module plugin](https://golangci-lint.run/docs/plugins/module-plugins/).
-
-From a checkout, `make golangci` builds golangci-lint with the plugins of this
-repository as `golangci-lint-precept` in `GOBIN`, beside the golangci-lint
-already installed, which it needs to run. The build clones golangci-lint, so it
-needs git and the network.
-
-```sh
-make golangci
-golangci-lint-precept run ./...
-```
-
-In another project, the same build comes from `.custom-gcl.yml`:
+[module plugin](https://golangci-lint.run/docs/plugins/module-plugins/). The
+project that uses it declares the build in its own `.custom-gcl.yml`:
 
 ```yaml
 version: v2.13.2

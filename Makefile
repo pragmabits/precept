@@ -1,14 +1,11 @@
-# Installs the analyzers of this module, standalone or built into golangci-lint,
-# and runs the gate. `make` alone lists the targets.
+# Installs the analyzers of this module and runs the gate. `make` alone lists
+# the targets.
 
 GOLANGCI_LINT ?= golangci-lint
 
-# Where `go install` puts binaries: GOBIN, or the bin of the first GOPATH entry.
-bin := $(or $(shell go env GOBIN),$(firstword $(subst :, ,$(shell go env GOPATH)))/bin)
-
 .DEFAULT_GOAL := help
 
-.PHONY: help install golangci test lint format
+.PHONY: help install test lint format
 
 help: ## List the targets.
 	@echo "usage: make <target>"
@@ -17,9 +14,6 @@ help: ## List the targets.
 
 install: ## Install the command of every analyzer into GOBIN.
 	go install ./cmd/...
-
-golangci: ## Build golangci-lint with the plugins, as golangci-lint-precept in GOBIN.
-	$(GOLANGCI_LINT) custom --destination $(bin)
 
 test: ## Run the tests, with the race detector, as the CI does.
 	go test -race ./...
