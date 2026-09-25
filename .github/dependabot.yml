@@ -1,0 +1,9 @@
+# Keeps the commit pins of .github/workflows current. Go modules are left out:
+# golang.org/x/tools follows the version golangci-lint requires
+# (docs/prds/golangci-lint.md §6), not the latest.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

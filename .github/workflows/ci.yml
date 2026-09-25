@@ -1,0 +1,57 @@
+# The gate of .claude/rules/exceptions-and-comments.md, on every pull request
+# and on the branches work lands on.
+#
+# Actions are pinned to a commit, not a tag: a tag can be moved to other code,
+# a commit cannot. Dependabot keeps the pins current (.github/dependabot.yml).
+name: ci
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.go-version || 'go.mod' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The go directive is the oldest Go the module promises, and the one
+        # golangci-lint accepts in a linter; stable is what users run next.
+        include:
+          - go-version-file: go.mod
+          - go-version: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ matrix.go-version-file }}
+          go-version: ${{ matrix.go-version }}
+      - run: go test -race ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # Installed only, so the gate runs the same commands as locally.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.2
+          install-only: true
+      - run: go mod tidy -diff
+      - run: golangci-lint config verify
+      - run: golangci-lint run ./...
+      # golangci-lint counts a test as use, so code only its own tests reach
+      # passes the run above (.claude/rules/planning.md).
+      - run: golangci-lint run --tests=false --enable-only unused ./...
