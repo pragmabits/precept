@@ -1,0 +1,5 @@
+rules:
+  - id: resource
+    trigger: (*example.com/project/resource.Resource).Open
+    satisfiers:
+      - (*example.com/project/resource.Resource).Close
