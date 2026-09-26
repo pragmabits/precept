@@ -1,0 +1,6 @@
+# Enter and Leave have only a context in common, and a context is not deduced.
+rules:
+  - id: scope
+    trigger: example.com/project/scope.Enter
+    satisfiers:
+      - example.com/project/scope.Leave

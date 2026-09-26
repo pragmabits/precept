@@ -1,0 +1,6 @@
+# The value is a slice of a type parameter, and no slot is named.
+rules:
+  - id: all
+    trigger: example.com/project/generic.HoldAll
+    satisfiers:
+      - example.com/project/generic.FreeAll

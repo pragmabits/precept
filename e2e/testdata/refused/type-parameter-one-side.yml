@@ -1,0 +1,8 @@
+# The type parameter is named on the trigger's side only.
+rules:
+  - id: hold
+    trigger:
+      name: example.com/project/generic.Hold
+      slot: argument 0
+    satisfiers:
+      - example.com/project/generic.Free

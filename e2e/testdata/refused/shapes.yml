@@ -1,0 +1,9 @@
+# A slice does not correspond with a map.
+rules:
+  - id: shapes
+    trigger:
+      name: example.com/project/generic.HoldAll
+      slot: argument 0
+    satisfiers:
+      - name: example.com/project/generic.Unlock
+        slot: argument 0

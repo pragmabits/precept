@@ -1,0 +1,205 @@
+# Every rule the project under testdata/project is checked against. The first
+# three are the README's own; the project's `// want` comments say what each
+# rule reports.
+rules:
+  - id: transaction
+    trigger: (*database/sql.DB).Begin
+    satisfiers:
+      - (*database/sql.Tx).Commit
+      - (*database/sql.Tx).Rollback
+    transfer: {return: true, store: false, argument: false}
+
+  - id: file
+    trigger: os.Open
+    satisfiers:
+      - (*os.File).Close
+
+  - id: lock
+    trigger: (*sync.Mutex).Lock
+    satisfiers:
+      - (*sync.Mutex).Unlock
+
+  - id: begintx
+    trigger: (*database/sql.DB).BeginTx
+    satisfiers:
+      - (*database/sql.Tx).Commit
+      - (*database/sql.Tx).Rollback
+
+  - id: pool
+    trigger: (*example.com/project/txn.Pool).Begin
+    satisfiers:
+      - (example.com/project/txn.Tx).Commit
+      - (example.com/project/txn.Tx).Rollback
+    transfer: {return: true, store: false, argument: false}
+
+  - id: pool-strict
+    trigger: (*example.com/project/txn.Pool).Begin
+    satisfiers:
+      - (example.com/project/txn.Tx).Commit
+      - (example.com/project/txn.Tx).Rollback
+    transfer: {return: true, store: false, argument: false}
+    require-defer: true
+
+  - id: conn
+    trigger: (*example.com/project/txn.Conn).Begin
+    satisfiers:
+      - (example.com/project/txn.Tx).Commit
+      - (example.com/project/txn.Tx).Rollback
+    transfer: {return: true, store: false, argument: false}
+
+  - id: savepoint
+    trigger:
+      name: (example.com/project/txn.Tx).Begin
+      slot: result 0
+    satisfiers:
+      - (example.com/project/txn.Tx).Commit
+      - (example.com/project/txn.Tx).Rollback
+    transfer: {return: true, store: false, argument: false}
+
+  - id: read
+    trigger: (*sync.RWMutex).RLock
+    satisfiers:
+      - (*sync.RWMutex).RUnlock
+
+  - id: read-strict
+    trigger: (*sync.RWMutex).RLock
+    satisfiers:
+      - (*sync.RWMutex).RUnlock
+    require-defer: true
+
+  - id: lease
+    trigger: example.com/project/lease.Acquire
+    satisfiers:
+      - (*example.com/project/lease.Lease).Release
+    open-on-error: true
+
+  - id: lease-strict
+    trigger: example.com/project/lease.Acquire
+    satisfiers:
+      - (*example.com/project/lease.Lease).Release
+    open-on-error: true
+    require-defer: true
+
+  - id: batch-any
+    trigger: example.com/project/batch.Start
+    satisfiers:
+      - (*example.com/project/batch.Job).Finish
+      - (*example.com/project/batch.Job).Cancel
+    deferred-closure: any-path
+
+  - id: batch-every
+    trigger: example.com/project/batch.Start
+    satisfiers:
+      - (*example.com/project/batch.Job).Finish
+      - (*example.com/project/batch.Job).Cancel
+    deferred-closure: every-path
+
+  - id: batch-none
+    trigger: example.com/project/batch.Start
+    satisfiers:
+      - (*example.com/project/batch.Job).Finish
+      - (*example.com/project/batch.Job).Cancel
+    deferred-closure: none
+
+  - id: batch-strict-every
+    trigger: example.com/project/batch.Start
+    satisfiers:
+      - (*example.com/project/batch.Job).Finish
+      - (*example.com/project/batch.Job).Cancel
+    deferred-closure: every-path
+    require-defer: true
+
+  - id: batch-strict-none
+    trigger: example.com/project/batch.Start
+    satisfiers:
+      - (*example.com/project/batch.Job).Finish
+      - (*example.com/project/batch.Job).Cancel
+    deferred-closure: none
+    require-defer: true
+
+  - id: fd
+    trigger:
+      name: example.com/project/fdio.Open
+      slot: result 0
+    satisfiers:
+      - example.com/project/fdio.Close
+    transfer: {return: true, store: false, argument: false}
+
+  - id: pin
+    trigger: example.com/project/pin.Pin
+    satisfiers:
+      - example.com/project/pin.Unpin
+
+  - id: scope
+    trigger:
+      name: example.com/project/scope.Enter
+      slot: result 0
+    satisfiers:
+      - name: example.com/project/scope.Leave
+        slot: argument 0
+
+  - id: handle
+    trigger: example.com/project/generic.Open
+    satisfiers:
+      - example.com/project/generic.Close
+
+  - id: box
+    trigger: example.com/project/generic.NewBox
+    satisfiers:
+      - (*example.com/project/generic.Box).Close
+
+  - id: cache
+    trigger: example.com/project/generic.NewCache
+    satisfiers:
+      - (*example.com/project/generic.Cache[K, V]).Close
+
+  - id: hold
+    trigger:
+      name: example.com/project/generic.Hold
+      slot: argument 0
+    satisfiers:
+      - name: example.com/project/generic.Free
+        slot: argument 0
+
+  - id: pair
+    trigger: example.com/project/pair.Both
+    satisfiers:
+      - example.com/project/release.Left
+
+  - id: all
+    trigger:
+      name: example.com/project/generic.HoldAll
+      slot: argument 0
+    satisfiers:
+      - name: example.com/project/generic.FreeAll
+        slot: argument 0
+
+  - id: entries
+    trigger:
+      name: example.com/project/generic.Lock
+      slot: argument 0
+    satisfiers:
+      - name: example.com/project/generic.Unlock
+        slot: argument 0
+
+  - id: serve
+    trigger: (*example.com/project/server.Server).Serve
+    satisfiers:
+      - (*example.com/project/server.Server).Shutdown
+
+  - id: serve-idempotent
+    trigger: (*example.com/project/server.Server).Serve
+    satisfiers:
+      - (*example.com/project/server.Server).Shutdown
+    idempotent: true
+
+  - id: write-first
+    trigger: (*sync.RWMutex).Lock
+    satisfiers:
+      - (*sync.RWMutex).Unlock
+    defer-first: true
+
+  - id: permit
+    trigger: (*example.com/project/sem.Semaphore).Acquire
+    satisfiers:
+      - call

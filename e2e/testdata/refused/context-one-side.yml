@@ -1,0 +1,8 @@
+# The context is named on the trigger's side only.
+rules:
+  - id: scope
+    trigger:
+      name: example.com/project/scope.Enter
+      slot: result 0
+    satisfiers:
+      - example.com/project/scope.Leave

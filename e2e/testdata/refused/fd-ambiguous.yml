@@ -1,0 +1,6 @@
+# fdio.Open takes an int mode beside the int it returns.
+rules:
+  - id: fd
+    trigger: example.com/project/fdio.Open
+    satisfiers:
+      - example.com/project/fdio.Close

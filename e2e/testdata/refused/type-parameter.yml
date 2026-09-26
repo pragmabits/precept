@@ -1,0 +1,6 @@
+# The L of Hold and the L of Free are different types.
+rules:
+  - id: hold
+    trigger: example.com/project/generic.Hold
+    satisfiers:
+      - example.com/project/generic.Free

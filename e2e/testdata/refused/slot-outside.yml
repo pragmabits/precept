@@ -1,0 +1,8 @@
+# Pin has one argument.
+rules:
+  - id: pin
+    trigger:
+      name: example.com/project/pin.Pin
+      slot: argument 3
+    satisfiers:
+      - example.com/project/pin.Unpin

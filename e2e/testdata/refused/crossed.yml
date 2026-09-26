@@ -1,0 +1,9 @@
+# map[K]K does not correspond with map[K]V: K cannot stand for both K and V.
+rules:
+  - id: crossed
+    trigger:
+      name: example.com/project/generic.Crossed
+      slot: argument 0
+    satisfiers:
+      - name: example.com/project/generic.Unlock
+        slot: argument 0
