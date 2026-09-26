@@ -34,10 +34,13 @@ func newPaircheck(settings any) (register.LinterPlugin, error) {
 	return linter{analyzers: []*analysis.Analyzer{analyzer}}, nil
 }
 
+// BuildAnalyzers returns the analyzer built from the settings.
 func (l linter) BuildAnalyzers() ([]*analysis.Analyzer, error) {
 	return l.analyzers, nil
 }
 
+// GetLoadMode asks for type information: a rule is bound to its functions
+// through their types.
 func (l linter) GetLoadMode() string {
 	return register.LoadModeTypesInfo
 }
