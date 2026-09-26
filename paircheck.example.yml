@@ -1,8 +1,10 @@
 # The rules of paircheck in its own format, with every optional key of a rule
-# written at its default. `slot` is left out: by default it is deduced from the
-# types, as the README describes under Rules, where every key is.
+# written at its default, and `failures` at its own. `slot` is left out: by
+# default it is deduced from the types, as the README describes under Rules,
+# where every key is.
 #
 #   paircheck -c paircheck.example.yml ./...
+failures: []
 rules:
   - id: transaction
     trigger: (*database/sql.DB).Begin
@@ -15,6 +17,7 @@ rules:
     require-defer: false
     idempotent: false
     defer-first: false
+    on-success: false
 
   - id: file
     trigger: os.Open
@@ -26,6 +29,7 @@ rules:
     require-defer: false
     idempotent: false
     defer-first: false
+    on-success: false
 
   - id: lock
     trigger: (*sync.Mutex).Lock
@@ -37,3 +41,4 @@ rules:
     require-defer: false
     idempotent: false
     defer-first: false
+    on-success: false

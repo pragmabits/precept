@@ -59,6 +59,22 @@ A function or method is named as
 a method name on both its value and its pointer. A method of a generic type is
 named with or without its type parameters, and a generic function without them.
 
+A package of your own module is named relative to it: `./` followed by its
+path inside the module, or `.` alone for the package at the module's root.
+
+```yaml
+  - id: platform
+    trigger: (./internal/platform/transaction.Provider).New
+    satisfiers:
+      - (./internal/platform/transaction.Transaction).Commit
+      - (./internal/platform/transaction.Transaction).Rollback
+```
+
+`..Open` is `Open` in the root package. A relative name is resolved against the
+module of each package analyzed, as its `go.mod` declares it, and a package
+that belongs to no module fails the analysis. `validate` resolves it against
+the module of the current directory.
+
 The value the obligation is on is found by its type. It may sit in the
 trigger's receiver, an argument or a result, and in a satisfier's receiver or
 an argument:
@@ -116,13 +132,33 @@ of another signature is not taken for it. `call` takes no slot.
 | `require-defer` | `false` | Count only a deferred satisfier: one called on the path does not discharge. |
 | `idempotent` | `false` | A trigger on a value whose obligation is open opens no other. |
 | `defer-first` | `false` | Require a deferred satisfier before any other call once the obligation opens. |
+| `on-success` | `false` | On every return that hands back no failure, require a satisfier called on the path: a deferred one alone does not count. |
 
 A slot is `receiver`, `argument N` or `result N`, counted from zero.
 
+Beside `rules`, the configuration takes `failures`: the functions and methods
+whose call returns an error that is not nil, besides `errors.New` and
+`fmt.Errorf`. A rule that is `on-success` reads a return of what one of them
+returned as a failure.
+
+```yaml
+failures:
+  - ./internal/errs.Wrap
+
+rules:
+  - id: platform
+    trigger: (./internal/platform/transaction.Provider).New
+    satisfiers:
+      - (./internal/platform/transaction.Transaction).Commit
+      - (./internal/platform/transaction.Transaction).Rollback
+    require-defer: true
+    on-success: true
+```
+
 `paircheck.example.yml` and `golangci.example.yml`, at the root of this
 repository, carry the `transaction`, `file` and `lock` rules with every optional
-key written at its default: in the command's own format and as golangci-lint
-settings.
+key written at its default, and an empty `failures`: in the command's own format
+and as golangci-lint settings.
 
 ### What it checks
 
@@ -160,9 +196,23 @@ settings.
 - Two triggers on the same value need two satisfiers, unless the rule is
   `idempotent`: then a second `Serve` on a running server needs no second
   `Shutdown`.
+- A deferred `Rollback` discharges every path, so nothing asks for the
+  `Commit`, and a function that never commits loses its write without an
+  error. `on-success` asks every return that is not a failure for a satisfier
+  called on the path, `Commit` or `Rollback`, while the `defer` still covers
+  the error and the panic. `return tx.Commit(ctx)` calls it on the path. A
+  return is a failure when the error it hands back cannot be nil: a concrete
+  value such as `&ValidationError{}`, what `errors.New`, `fmt.Errorf` or a
+  function in `failures` returned, a package-level error such as `io.EOF`, or
+  an error a check on the path found not nil, as in
+  `if err != nil { return err }`, until something else is stored where it was.
+  Anything else owes the call, `nil` and the result of any other function
+  included. In a function without an `error` result, every return owes it. A
+  value that leaves the function still takes its obligation along.
 
 When paircheck cannot tell, it stays silent: a false negative is preferred to a
-false positive.
+false positive. `on-success` is the exception, by design: a return whose error
+paircheck cannot prove a failure owes the call.
 
 ### Running it
 
@@ -172,8 +222,8 @@ go install github.com/pragmabits/precept/cmd/paircheck@latest
 paircheck --config rules.yml ./...
 ```
 
-From a checkout, `make install` installs the command of every analyzer into
-`GOBIN`.
+From a checkout, `make install` installs the command of every analyzer where
+`go install` puts it: `GOBIN`, or the `bin` of the first `GOPATH` entry.
 
 The exit code is 0 with no diagnostic, 3 with diagnostics, and 1 when the
 configuration or the packages fail to load, or a rule cannot bind (see
@@ -196,7 +246,8 @@ slot is not in the signature. Inside golangci-lint, that error stops every
 the rule, since a satisfier it does not see may be what settles the slot. The
 `validate` mode loads the packages the rules name and checks every rule: the
 names exist, one type links the trigger to every satisfier, and each slot is in
-the signature.
+the signature. It also checks that every entry of `failures` exists and returns
+an error as its last result.
 
 ```sh
 paircheck validate --config .golangci.yml
@@ -255,6 +306,12 @@ linters:
   discharges, and paircheck stays silent.
 - The command does not run as a `go vet -vettool`: it does not speak the
   protocol `go vet` uses with a vet tool.
+- Under `on-success`, an error checked with `errors.Is`, `errors.As` or a
+  `switch` is not known to be a failure, and neither is one a wrapper outside
+  `failures` returned: a return of it with no satisfier called on the path is
+  reported. A package-level error variable left nil is read as a failure.
+- Under `on-success`, a satisfier inside a deferred closure is not a call on
+  the path: `defer func() { … err = tx.Commit(ctx) }()` is reported.
 
 ## Development
 
@@ -263,10 +320,6 @@ CI runs, and `make format` rewrites what the formatters would change. `make e2e`
 builds golangci-lint with the plugins first, which needs git and the network,
 and refuses to when golangci-lint's tag no longer names the commit the Makefile
 pins.
-
-## Status
-
-The first tagged version is `v0.1.0`.
 
 ## Use of AI
 

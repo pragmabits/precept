@@ -1,6 +1,7 @@
 # paircheck in a golangci-lint configuration, with every optional key of a rule
-# written at its default. `slot` is left out: by default it is deduced from the
-# types, as the README describes under Rules, where every key is.
+# written at its default, and `failures` at its own. `slot` is left out: by
+# default it is deduced from the types, as the README describes under Rules,
+# where every key is.
 #
 #   golangci-lint-precept run -c golangci.example.yml ./...
 #   paircheck -c golangci.example.yml ./...
@@ -14,6 +15,7 @@ linters:
         type: module
         description: Reports an obligation not discharged on every path.
         settings:
+          failures: []
           rules:
             - id: transaction
               trigger: (*database/sql.DB).Begin
@@ -26,6 +28,7 @@ linters:
               require-defer: false
               idempotent: false
               defer-first: false
+              on-success: false
 
             - id: file
               trigger: os.Open
@@ -37,6 +40,7 @@ linters:
               require-defer: false
               idempotent: false
               defer-first: false
+              on-success: false
 
             - id: lock
               trigger: (*sync.Mutex).Lock
@@ -48,3 +52,4 @@ linters:
               require-defer: false
               idempotent: false
               defer-first: false
+              on-success: false

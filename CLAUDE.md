@@ -47,6 +47,9 @@ make test   # go test -race -count=1 ./...
    module plugin (JSON).
 2. **Binding, per pass.** `bind.go` resolves each protocol against the packages
    the analyzed package can see:
+   - it first resolves a name relative to the module (`./internal/x`, `.` for
+     the root package) against `pass.Module`, which golangci-lint fills and the
+     command loads with `packages.NeedModule` (`name.go`, `protocol.go`);
    - it finds the trigger and the satisfiers by qualified name (`name.go`);
    - it deduces by type the slot that carries the value (receiver, argument or
      result), leaving `context.Context` out of the deduction;
@@ -60,14 +63,19 @@ make test   # go test -race -count=1 ./...
    the `validate` subcommand.
 3. **Search.** `flow.go` starts at each trigger call and walks the SSA blocks
    depth first. The state is small and finite (open and deferred counts
-   saturated at 2, an uncertain flag and a displaced-error flag), so the search
-   always terminates. Instructions become events, and a path leaks at a
-   `return` (`leakAtExit`) or, under `defer-first`, at a call made before the
-   deferred satisfier (`leakBeforeDefer`). A `panic` or a call that does not
-   return abandons the path.
+   saturated at 2, an uncertain flag and a displaced-error flag, and under
+   `on-success` a called flag and the error value and variable the path knows
+   to hold a failure), so the search always terminates. Instructions become
+   events, and a path leaks at a `return` (`leakAtExit`), under `defer-first`
+   at a call made before the deferred satisfier (`leakBeforeDefer`), or under
+   `on-success` at a return that hands back no failure with no satisfier called
+   on the path (`leakOnSuccess`). A `panic` or a call that does not return
+   abandons the path.
 4. **The rest of the search:**
    - `failure.go`: the error the trigger returned, and the branches that check
      it;
+   - `success.go`: under `on-success`, whether the error a return hands back is
+     a failure;
    - `identity.go`: access paths and a three-valued sameness;
    - `closure.go`: deferred closures, as `deferred-closure` says;
    - `transfer.go`: the exits by return, store and argument;
@@ -87,6 +95,8 @@ golangci-lint accepts linters, not detectors.
   plugin settings (`linters.settings.custom.paircheck.settings`).
 - It runs `checker.Analyze` over `packages.Load` and prints each distinct error
   once. Exit codes: 0 clean, 3 with diagnostics, 1 on failure.
+- `validate` resolves relative names against the module of the current
+  directory, read from the `go.mod` that `go env GOMOD` names.
 
 ### `plugin/`
 
@@ -124,9 +134,9 @@ sit at the repository root: golangci-lint-action builds any root
     `make golangci` refuses to build.
 
   Dependabot updates none of them.
-- **Dependency versions:** `golang.org/x/tools`, `plugin-module-register`,
-  `go.yaml.in/yaml/v3` and `pflag` must not be newer than the ones the pinned
-  golangci-lint uses.
+- **Dependency versions:** `golang.org/x/tools`, `golang.org/x/mod`,
+  `plugin-module-register`, `go.yaml.in/yaml/v3` and `pflag` must not be newer
+  than the ones the pinned golangci-lint uses.
 - **The CI lint job's Go:** it builds golangci-lint with the latest stable Go,
   because gofmt and golines format as the Go they are compiled with.
 
