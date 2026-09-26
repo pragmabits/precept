@@ -7,7 +7,9 @@
 //	paircheck -v
 //
 // The file holds the rules, or is a golangci-lint configuration carrying them
-// in its settings, native or as a module plugin.
+// in its settings, native or as a module plugin. The test files are analyzed
+// too, as golangci-lint analyzes them: --tests decides, and without it the
+// run.tests of a golangci-lint configuration.
 package main
 
 import (
@@ -21,6 +23,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime/debug"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -63,6 +66,11 @@ const usage = `usage: paircheck -c file packages...
                       --tests=false
   -v, --version       print the version and exit
 `
+
+// testVariant matches the ID go/packages gives the test variant of a package,
+// "p [q.test]": the package, p, and the package whose test binary it is built
+// for, q, whose test main is q.test.
+var testVariant = regexp.MustCompile(`^(.*) \[(.*)\.test\]`)
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -172,9 +180,10 @@ func analyze(
 	return outcome(graph), nil
 }
 
-// validate loads the packages the rules name, once, and checks the rules
-// against them. A name relative to the module is resolved against the module
-// of the current directory.
+// validate loads the packages the rules name, once and without their tests,
+// and checks the rules against them: a rule on a function declared in a
+// _test.go file is refused, although the analysis applies it. A name relative
+// to the module is resolved against the module of the current directory.
 func validate(config paircheck.Config) (int, error) {
 	module, err := currentModule()
 	if err != nil {
@@ -246,17 +255,22 @@ func outcome(graph *checker.Graph) int {
 
 // loadErrors joins the distinct errors of the packages and of what they
 // import. A file of a package with tests is loaded in the package and in its
-// test variant, with the same errors in both.
+// test variant, with the same errors in both. An error with no position, such
+// as an import cycle in a test, is named by its package.
 func loadErrors(loaded []*packages.Package) error {
 	var problems []error
 	seen := make(map[string]bool)
 	packages.Visit(loaded, nil, func(current *packages.Package) {
 		for _, problem := range current.Errors {
-			if seen[problem.Error()] {
+			found := error(problem)
+			if problem.Pos == "" {
+				found = fmt.Errorf("%s: %s", current.ID, problem.Msg)
+			}
+			if seen[found.Error()] {
 				continue
 			}
-			seen[problem.Error()] = true
-			problems = append(problems, problem)
+			seen[found.Error()] = true
+			problems = append(problems, found)
 		}
 	})
 	return errors.Join(problems...)
@@ -265,19 +279,28 @@ func loadErrors(loaded []*packages.Package) error {
 // analyzed is what golangci-lint analyzes of packages loaded with their tests:
 // the test variant of a package in place of the package, whose files it holds,
 // and no test main that go test generates. A pass over the test main would see
-// what testing imports, and bind rules no package of the project can.
+// what testing imports, and bind rules no package of the project can. A test
+// main is one a loaded test variant is built for: a main package of the
+// project whose import path ends in .test is analyzed, where golangci-lint
+// drops it.
 func analyzed(loaded []*packages.Package) []*packages.Package {
-	variant := regexp.MustCompile(`^(.*) \[(.*)\.test\]`)
+	variants := make(map[string]bool)
 	tested := make(map[string]bool)
+	mains := make(map[string]bool)
 	for _, current := range loaded {
-		if match := variant.FindStringSubmatch(current.ID); match != nil {
-			tested[match[1]] = true
+		match := testVariant.FindStringSubmatch(current.ID)
+		if match == nil {
+			continue
 		}
+		variants[current.ID] = true
+		tested[match[1]] = true
+		mains[match[2]+".test"] = true
 	}
 	var kept []*packages.Package
 	for _, current := range loaded {
-		testMain := current.Name == "main" && strings.HasSuffix(current.PkgPath, ".test")
-		replaced := !variant.MatchString(current.ID) && tested[current.PkgPath]
+		plain := !variants[current.ID]
+		testMain := plain && current.Name == "main" && mains[current.PkgPath]
+		replaced := plain && tested[current.PkgPath]
 		if !testMain && !replaced {
 			kept = append(kept, current)
 		}
@@ -297,11 +320,7 @@ func readConfig(path string) (paircheck.Config, bool, error) {
 	if err := yaml.Unmarshal(content, &document); err != nil {
 		return paircheck.Config{}, false, fmt.Errorf("%s: %w", path, err)
 	}
-	tests, err := testsOf(document)
-	if err != nil {
-		return paircheck.Config{}, false, fmt.Errorf("%s: %w", path, err)
-	}
-	settings, err := settingsOf(document)
+	settings, tests, err := settingsOf(document)
 	if err != nil {
 		return paircheck.Config{}, false, fmt.Errorf("%s: %w", path, err)
 	}
@@ -318,43 +337,56 @@ func readConfig(path string) (paircheck.Config, bool, error) {
 	return config, tests, nil
 }
 
-// testsOf is run.tests of a golangci-lint configuration: whether the test
-// files are analyzed. It is true when the configuration does not say, as in
-// golangci-lint, and for the command's own file, which has no run section.
-func testsOf(document map[string]any) (bool, error) {
-	if _, isGolangci := document["linters"].(map[string]any); !isGolangci {
-		return true, nil
-	}
-	section, _ := document["run"].(map[string]any)
-	value, written := section["tests"]
-	if !written {
-		return true, nil
-	}
-	tests, isBool := value.(bool)
-	if !isBool {
-		return false, errRunTests
-	}
-	return tests, nil
-}
-
-// settingsOf finds the rules in a document: the document itself, or the
-// paircheck settings of a golangci-lint configuration, native or as a module
-// plugin.
-func settingsOf(document map[string]any) (any, error) {
+// settingsOf finds what the command reads in a document: the rules, in the
+// document itself or in the paircheck settings of a golangci-lint
+// configuration, native or as a module plugin, and whether the test files are
+// analyzed, which only a golangci-lint configuration says, in run.tests.
+func settingsOf(document map[string]any) (any, bool, error) {
 	linters, isGolangci := document["linters"].(map[string]any)
 	if !isGolangci {
-		return document, nil
+		return document, true, nil
+	}
+	section, _ := document["run"].(map[string]any)
+	tests, err := testsOf(section["tests"])
+	if err != nil {
+		return nil, false, err
 	}
 	settings, _ := linters["settings"].(map[string]any)
 	if native, ok := settings[linterName]; ok {
-		return native, nil
+		return native, tests, nil
 	}
 	custom, _ := settings["custom"].(map[string]any)
 	plugin, _ := custom[linterName].(map[string]any)
 	if pluginSettings, ok := plugin["settings"]; ok {
-		return pluginSettings, nil
+		return pluginSettings, tests, nil
 	}
-	return nil, errNoSettings
+	return nil, false, errNoSettings
+}
+
+// testsOf reads run.tests as golangci-lint decodes it, weakly typed: text as
+// strconv.ParseBool reads it, with the empty text false, a number as whether
+// it is not zero, and a key left empty as unwritten, which is true.
+func testsOf(value any) (bool, error) {
+	switch typed := value.(type) {
+	case nil:
+		return true, nil
+	case bool:
+		return typed, nil
+	case int:
+		return typed != 0, nil
+	case float64:
+		return typed != 0, nil
+	case string:
+		if typed == "" {
+			return false, nil
+		}
+		parsed, err := strconv.ParseBool(typed)
+		if err != nil {
+			return false, errRunTests
+		}
+		return parsed, nil
+	}
+	return false, errRunTests
 }
 
 // version is the version of the module the binary was built from, as the go

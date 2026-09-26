@@ -66,15 +66,19 @@ func TestGolangciWithoutSettings(t *testing.T) {
 	}
 }
 
-// TestGolangciWithoutTests leaves the test files out under run.tests: false,
-// as the command does with the same configuration.
-func TestGolangciWithoutTests(t *testing.T) {
-	config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": false})
-	code, stdout, stderr := golangci(t, "run", "-c", config, "./...")
-	if code != golangciIssues {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
+// TestGolangciFollowsRunTests reads each value of run.tests the command's
+// TestCommandFollowsRunTests reads, with the same outcome.
+func TestGolangciFollowsRunTests(t *testing.T) {
+	for _, test := range runTestsValues {
+		t.Run(test.name, func(t *testing.T) {
+			config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.value})
+			code, stdout, stderr := golangci(t, "run", "-c", config, "./...")
+			if code != golangciIssues {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
+			}
+			compareWith(t, findings(t, stdout, " (paircheck)"), analyzedUnder(t, test.analyzed))
+		})
 	}
-	compareWith(t, findings(t, stdout, " (paircheck)"), outsideTests(t))
 }
 
 // TestGolangciSkipsTestMain runs a rule only the generated test main could

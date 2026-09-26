@@ -28,6 +28,33 @@ const (
 	testMain = "testdata/testmain.yml"
 )
 
+// runTestsValues is what golangci-lint reads in run.tests, weakly typed, with
+// whether the test files are analyzed under it.
+var runTestsValues = []struct {
+	name     string
+	value    any
+	analyzed bool
+}{
+	{name: "false", value: false, analyzed: false},
+	{name: "true", value: true, analyzed: true},
+	{name: "text false", value: "false", analyzed: false},
+	{name: "text t", value: "t", analyzed: true},
+	{name: "empty text", value: "", analyzed: false},
+	{name: "zero", value: 0, analyzed: false},
+	{name: "one", value: 1, analyzed: true},
+	{name: "null", value: nil, analyzed: true},
+}
+
+// analyzedUnder is the expectations of the project the command and
+// golangci-lint meet when the test files are analyzed, or when they are not.
+func analyzedUnder(t *testing.T, tests bool) []expectation {
+	t.Helper()
+	if tests {
+		return expectations(t)
+	}
+	return outsideTests(t)
+}
+
 // refusal is a configuration the analysis refuses, with the error it gives
 // and a text that error must not carry.
 type refusal struct {

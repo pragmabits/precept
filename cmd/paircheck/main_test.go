@@ -158,6 +158,43 @@ func TestAnalyzePrintsLoadErrorsOnce(t *testing.T) {
 	}
 }
 
+func TestAnalyzeNamesThePackageOfAnErrorWithoutPosition(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "cycles"))
+	code, _, stderr := execute("--config", write(t, "rules: []\n"), "./...")
+	if code != exitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
+	}
+	for _, want := range []string{
+		"example.com/cycles/first [example.com/cycles/first.test]: import cycle not allowed in test",
+		"example.com/cycles/third [example.com/cycles/third.test]: import cycle not allowed in test",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want it to contain %q", stderr, want)
+		}
+	}
+}
+
+func TestAnalyzeKeepsAMainNamedLikeATestMain(t *testing.T) {
+	rules := `rules:
+  - id: file
+    trigger: os.Open
+    satisfiers: [(*os.File).Close]
+`
+	want := "main.go:8:15: [file] Open requires Close on file before function exit"
+	for _, spelling := range []string{"--tests", "--tests=false"} {
+		t.Run(spelling, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "lookalike"))
+			code, stdout, stderr := execute("--config", write(t, rules), spelling, "./...")
+			if code != exitFindings {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+			}
+			if !strings.Contains(stdout, want) {
+				t.Errorf("stdout = %q, want it to contain %q", stdout, want)
+			}
+		})
+	}
+}
+
 func TestAnalyzeRefusesRunTests(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "project"))
 	config := write(t, `run:

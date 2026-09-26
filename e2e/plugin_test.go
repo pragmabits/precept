@@ -121,21 +121,27 @@ func analyze(t *testing.T, analyzers []*analysis.Analyzer) *checker.Graph {
 	return graph
 }
 
+// testVariant matches the ID of a test variant as golangci-lint does
+// (pkg/lint/package.go): "p [q.test]", naming p.
+var testVariant = regexp.MustCompile(`^(.*) \[(.*)\.test\]`)
+
 // analyzed is what golangci-lint analyzes of packages loaded with their tests
 // (pkg/lint/package.go): the test variant of a package in place of the
-// package, which it holds, and no generated test main.
+// package, which it holds, and no package named main whose import path ends in
+// .test, its reading of a test main.
 func analyzed(loaded []*packages.Package) []*packages.Package {
-	variant := regexp.MustCompile(`^(.*) \[(.*)\.test\]`)
+	variants := make(map[string]bool)
 	tested := make(map[string]bool)
 	for _, current := range loaded {
-		if match := variant.FindStringSubmatch(current.ID); match != nil {
+		if match := testVariant.FindStringSubmatch(current.ID); match != nil {
+			variants[current.ID] = true
 			tested[match[1]] = true
 		}
 	}
 	var kept []*packages.Package
 	for _, current := range loaded {
 		testMain := current.Name == "main" && strings.HasSuffix(current.PkgPath, ".test")
-		replaced := !variant.MatchString(current.ID) && tested[current.PkgPath]
+		replaced := !variants[current.ID] && tested[current.PkgPath]
 		if !testMain && !replaced {
 			kept = append(kept, current)
 		}

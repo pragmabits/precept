@@ -41,43 +41,47 @@ func TestCommandWithoutTests(t *testing.T) {
 }
 
 // TestCommandFollowsRunTests reads run.tests of a golangci-lint configuration
-// as golangci-lint does: --tests written on the command line wins over it.
+// as golangci-lint does, and analyzes the test files when it is not written.
 func TestCommandFollowsRunTests(t *testing.T) {
-	tests := []struct {
-		name     string
-		run      map[string]any
-		flags    []string
-		reported bool
-	}{
-		{name: "unset", run: nil, flags: nil, reported: true},
-		{name: "false", run: map[string]any{"tests": false}, flags: nil, reported: false},
-		{name: "true", run: map[string]any{"tests": true}, flags: nil, reported: true},
-		{
-			name:     "false under --tests",
-			run:      map[string]any{"tests": false},
-			flags:    []string{"--tests"},
-			reported: true,
-		},
-		{
-			name:     "true under --tests=false",
-			run:      map[string]any{"tests": true},
-			flags:    []string{"--tests=false"},
-			reported: false,
-		},
-	}
-	for _, test := range tests {
+	for _, test := range runTestsValues {
 		t.Run(test.name, func(t *testing.T) {
-			config := golangciConfig(t, settingsOf(t, rules), test.run)
-			arguments := append([]string{"-c", config}, test.flags...)
-			code, stdout, stderr := execute(t, nil, command, append(arguments, "./...")...)
+			config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.value})
+			code, stdout, stderr := execute(t, nil, command, "-c", config, "./...")
 			if code != exitFindings {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 			}
-			want := outsideTests(t)
-			if test.reported {
-				want = expectations(t)
+			compareWith(t, findings(t, stdout, ""), analyzedUnder(t, test.analyzed))
+		})
+	}
+	t.Run("unset", func(t *testing.T) {
+		config := golangciConfig(t, settingsOf(t, rules), nil)
+		code, stdout, stderr := execute(t, nil, command, "-c", config, "./...")
+		if code != exitFindings {
+			t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+		}
+		compare(t, findings(t, stdout, ""))
+	})
+}
+
+// TestCommandFlagWinsOverRunTests writes --tests on the command line against
+// run.tests, and the flag decides, as it does in golangci-lint.
+func TestCommandFlagWinsOverRunTests(t *testing.T) {
+	tests := []struct {
+		flag     string
+		run      bool
+		analyzed bool
+	}{
+		{flag: "--tests", run: false, analyzed: true},
+		{flag: "--tests=false", run: true, analyzed: false},
+	}
+	for _, test := range tests {
+		t.Run(test.flag, func(t *testing.T) {
+			config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.run})
+			code, stdout, stderr := execute(t, nil, command, "-c", config, test.flag, "./...")
+			if code != exitFindings {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 			}
-			compareWith(t, findings(t, stdout, ""), want)
+			compareWith(t, findings(t, stdout, ""), analyzedUnder(t, test.analyzed))
 		})
 	}
 }
