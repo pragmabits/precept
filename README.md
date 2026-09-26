@@ -246,7 +246,9 @@ The build flags follow golangci-lint's too. `--build-tags` takes build tags,
 comma-separated, and adds them to the `run.build-tags` of a `.golangci.yml`.
 `--modules-download-mode`, which is `mod`, `readonly` or `vendor`, replaces
 its `run.modules-download-mode`. The load passes both to go, as `-tags` and
-`-mod`, for the analysis and for `validate`.
+`-mod`, for the analysis and for `validate`. A flag that replaces a key,
+`--tests` or `--modules-download-mode`, leaves the file's key unread, as
+golangci-lint does.
 
 From a `.golangci.yml` the command reads only the paircheck settings and
 those three keys of `run`: `tests`, `build-tags` and `modules-download-mode`.
@@ -351,6 +353,14 @@ keeps the test files out of it.
   runs paircheck over it too, and a rule over a package `testing` imports,
   which the project never sees, can fail the run there. Such a driver drops
   the test main a loaded test variant is built for, or runs with `-test=false`.
+- A package whose import path is a tested package's path plus `.test`, such
+  as `m/a.test` next to `m/a` with tests, stops the load while the tests are
+  loaded: the test main of `m/a` has that path, and `go list` gives
+  conflicting information for it. golangci-lint stops the same way;
+  `--tests=false` loads it.
+- A test whose signature `go test` refuses, such as
+  `func TestX(b *testing.B)`, is not a load error: the file compiles, and the
+  command runs on, as golangci-lint does. `go vet` reports it.
 - `validate` loads the packages the rules name without their tests, whatever
   `--tests` or `run.tests` say: a rule naming a function or method declared in
   a `_test.go` file is refused as unknown, although the analysis applies it.

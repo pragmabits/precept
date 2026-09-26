@@ -22,7 +22,7 @@ help: ## List the targets.
 	@echo
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z0-9]+:.*## / { printf "  %-10s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-install: ## Install the command of every analyzer into GOBIN.
+install: ## Install the command of every analyzer where go install puts it.
 	go install ./cmd/...
 
 # golangci-lint custom reads .custom-gcl.yml only from the directory it runs in.

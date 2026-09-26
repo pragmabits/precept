@@ -34,6 +34,10 @@ make test   # go test -race -count=1 ./...
   the golangci-lint binary it runs.
 - The command from a checkout: `go run ./cmd/paircheck -c rules.yml ./...`, and
   `go run ./cmd/paircheck validate -c rules.yml`.
+- Commits are checked by the `commit-msg`, `pre-commit` and
+  `prepare-commit-msg` hooks in `.git/hooks/`, which git does not version: a
+  new clone installs them with `/git:commit-setup --apply`. The subject is
+  `type: description`, with no scope.
 
 ## Architecture
 
@@ -104,8 +108,8 @@ packages load, `config.go` the reading of the file, `analyze.go` and
   read weakly typed as golangci-lint reads it (`loadingOf`): `run.tests`,
   `run.build-tags` and `run.modules-download-mode`. As in golangci-lint,
   `--tests` and `--modules-download-mode` written on the command line replace
-  the value and `--build-tags` adds tags, and the load passes them to go as
-  its `makeBuildFlags` does. The keys of the file are folded to lower case as
+  their key, which is then not read from the file, `--build-tags` adds tags,
+  and the load passes them to go as its `makeBuildFlags` does. The keys of the file are folded to lower case as
   viper folds them (`folded`), and two that fold alike are refused.
 - The rules come from the command's own YAML (`rules:` at the top), or from a
   `.golangci.yml`, as native settings (`linters.settings.paircheck`) or as
@@ -166,6 +170,14 @@ sit at the repository root: golangci-lint-action builds any root
 - **Dependency versions:** `golang.org/x/tools`, `golang.org/x/mod`,
   `plugin-module-register`, `go.yaml.in/yaml/v3` and `pflag` must not be newer
   than the ones the pinned golangci-lint uses.
+- **What the command copies from golangci-lint:** `split` follows its
+  `filterDuplicatePackages` and, but for the test main, its
+  `filterTestMainPackages` (`pkg/lint/package.go`); `packagesConfig` its
+  `makeBuildFlags`; `testsOf`, `tagsOf`, `modeOf` and `text` the weak decoding
+  of mapstructure; `folded` viper's `insensitiviseMap`; and `loadingOf` the
+  precedence of viper and of `applyStringSliceHack`. The e2e harness's
+  `analyzed` copies the filter as it is. When the pin moves, compare them: the
+  e2e with the `golangci` tag is what sees a drift.
 - **The CI lint job's Go:** it builds golangci-lint with the latest stable Go,
   because gofmt and golines format as the Go they are compiled with.
 
@@ -184,9 +196,16 @@ test before its tag exists.
   `--modules-download-mode` and `-v`/`--version` only: under pflag,
   `-config rules.yml` parses as `-c onfig`, with `rules.yml` as a package, and
   `--tests false` takes `false` as a package.
-- golangci-lint looks for `.golangci.{yml,yaml,toml,json}` from the directory of
-  its first package argument: a configuration anywhere in the tree is named
-  otherwise (`golangci.example.yml`).
+- golangci-lint takes the first file named exactly
+  `.golangci.{yml,yaml,toml,json}` in `./`, then in the directory of its first
+  package argument and each parent up to `/`, then in the home directory
+  (`getConfigSearchPaths`, `pkg/config/base_loader.go`). The root's
+  `.golangci.yml` is this project's own lint configuration, which is why the
+  example for users is `golangci.example.yml`; the e2e passes `-c` to every
+  run, so no configuration of the tree reaches it.
+- `make golangci` runs `golangci-lint custom`, which clones golangci-lint under
+  `os.TempDir()` (`pkg/commands/custom.go`): where `/tmp` is not writable, as
+  in a sandbox, set `TMPDIR` to a directory that is.
 - Never move or recreate a pushed tag: Go keeps the old content in the download
   cache, the VCS clone under `$(go env GOMODCACHE)/cache/vcs` and the module
   index in GOCACHE; recovering needed `go clean -cache`.
