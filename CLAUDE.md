@@ -89,23 +89,37 @@ golangci-lint accepts linters, not detectors.
 
 ### `cmd/paircheck/`, the command
 
+One file per subject: `main.go` the command line, `loading.go` how the
+packages load, `config.go` the reading of the file, `analyze.go` and
+`validate.go` the two modes.
+
 - GNU-style flags through pflag; `validate` is the first positional argument.
 - It loads the packages with their tests and analyzes what golangci-lint
-  analyzes (`analyzed`): the test variant in place of its package, and no
+  analyzes (`split`): the test variant in place of its package, and no
   generated test main. A test main is one a loaded variant is built for, so a
   main package whose path ends in `.test` is analyzed, where golangci-lint
-  drops it. `--tests` defaults to `run.tests` when `-c` names a
-  `.golangci.yml`, read weakly typed as golangci-lint reads it (`testsOf`),
-  and a `--tests` written on the command line wins, as in golangci-lint.
+  drops it. The analyzer itself does not skip the test main: only a driver
+  sees which one a variant names (README Limits).
+- `loading` is what the run section of a `.golangci.yml` says about the load,
+  read weakly typed as golangci-lint reads it (`loadingOf`): `run.tests`,
+  `run.build-tags` and `run.modules-download-mode`. As in golangci-lint,
+  `--tests` and `--modules-download-mode` written on the command line replace
+  the value and `--build-tags` adds tags, and the load passes them to go as
+  its `makeBuildFlags` does. The keys of the file are folded to lower case as
+  viper folds them (`folded`), and two that fold alike are refused.
 - The rules come from the command's own YAML (`rules:` at the top), or from a
   `.golangci.yml`, as native settings (`linters.settings.paircheck`) or as
   plugin settings (`linters.settings.custom.paircheck.settings`).
 - It runs `checker.Analyze` over `packages.Load` and prints each distinct error
-  once. Exit codes: 0 clean, 3 with diagnostics, 1 on failure.
+  once, in the order of the build: the load errors of the packages as they
+  build without their tests, and those of the test variants only once the
+  packages load, since a variant holds its package and fails with it. Exit
+  codes: 0 clean, 3 with diagnostics, 1 on failure.
 - `validate` resolves relative names against the module of the current
   directory, read from the `go.mod` that `go env GOMOD` names. It loads
-  without the tests, whatever `--tests` says: a rule on a function declared in
-  a `_test.go` is refused, a limit the README states.
+  under the build flags of the analysis, but without the tests, whatever
+  `--tests` says: a rule on a function declared in a `_test.go` is refused, a
+  limit the README states.
 
 ### `plugin/`
 
@@ -130,6 +144,10 @@ sit at the repository root: golangci-lint-action builds any root
     golangci-lint's filter, kept apart from the command's);
   - behind the `golangci` build tag, golangci-lint with the plugin, whose path
     comes from `PRECEPT_GOLANGCI_LINT`.
+
+  A run meets only some expectations: those of the `_test.go` files with the
+  tests loaded, and those of `tagged/`, built only under the `precept` tag,
+  with that tag. `expected(t, tests, tagged)` picks them.
 
   `e2e/testdata/refused/*.yml` must fail with the error in the test's
   `refusals` table. `e2e/testdata/testmain.yml` holds a rule only the
@@ -162,9 +180,10 @@ test before its tag exists.
 
 ## Gotchas
 
-- Flags are `-c`/`--config`, `--tests` and `-v`/`--version` only: under
-  pflag, `-config rules.yml` parses as `-c onfig`, with `rules.yml` as a
-  package, and `--tests false` takes `false` as a package.
+- Flags are `-c`/`--config`, `--tests`, `--build-tags`,
+  `--modules-download-mode` and `-v`/`--version` only: under pflag,
+  `-config rules.yml` parses as `-c onfig`, with `rules.yml` as a package, and
+  `--tests false` takes `false` as a package.
 - golangci-lint looks for `.golangci.{yml,yaml,toml,json}` from the directory of
   its first package argument: a configuration anywhere in the tree is named
   otherwise (`golangci.example.yml`).

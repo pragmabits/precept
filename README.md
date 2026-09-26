@@ -227,7 +227,9 @@ From a checkout, `make install` installs the command of every analyzer where
 
 The exit code is 0 with no diagnostic, 3 with diagnostics, and 1 when the
 configuration fails to load, or the packages do, a test file that does not
-compile included, or a rule cannot bind (see Validating the rules).
+compile included, or a rule cannot bind (see Validating the rules). The load
+errors of the packages come first, and those of their tests only once the
+packages load.
 
 `-c`, `--config` takes a file with the rules, as above, or a `.golangci.yml`
 carrying them in its settings, native or as a module plugin. Flags follow the
@@ -237,8 +239,20 @@ The `_test.go` files are analyzed too, those of the package and those of its
 external `_test` package, as golangci-lint analyzes them. `--tests=false`
 leaves them out. When `-c` names a `.golangci.yml`, its `run.tests` decides
 where the command line does not, read as golangci-lint reads it: a `--tests`
-written there wins, as in golangci-lint. A boolean flag takes its value after `=`: in `--tests false`,
-`false` is a package.
+written there wins, as in golangci-lint. A boolean flag takes its value after
+`=`: in `--tests false`, `false` is a package.
+
+The build flags follow golangci-lint's too. `--build-tags` takes build tags,
+comma-separated, and adds them to the `run.build-tags` of a `.golangci.yml`.
+`--modules-download-mode`, which is `mod`, `readonly` or `vendor`, replaces
+its `run.modules-download-mode`. The load passes both to go, as `-tags` and
+`-mod`, for the analysis and for `validate`.
+
+From a `.golangci.yml` the command reads only the paircheck settings and
+those three keys of `run`: `tests`, `build-tags` and `modules-download-mode`.
+Their keys may be written in any case, as golangci-lint reads them, and two
+keys that differ only in case are refused. It does not follow
+`linters.exclusions` or any other key of golangci-lint's.
 
 `-v`, `--version` prints the version the binary was built from, such as `v0.1.0`.
 
@@ -251,7 +265,8 @@ the rule's error: its types do not settle one slot on each side, or a written
 slot is not in the signature. Inside golangci-lint, that error stops every
 `go/analysis` linter of the run. A package that sees only some of them skips
 the rule, since a satisfier it does not see may be what settles the slot. The
-`validate` mode loads the packages the rules name and checks every rule: the
+`validate` mode loads the packages the rules name, under the build tags and
+the modules download mode of the analysis, and checks every rule: the
 names exist, one type links the trigger to every satisfier, and each slot is in
 the signature. It also checks that every entry of `failures` exists and returns
 an error as its last result.
@@ -329,6 +344,13 @@ keeps the test files out of it.
   discharges, and paircheck stays silent.
 - The command does not run as a `go vet -vettool`: it does not speak the
   protocol `go vet` uses with a vet tool.
+- The test main that `go test` generates is left out by the command and by
+  golangci-lint, not by the analyzer: inside a pass, only its name would tell
+  it apart. Another driver that loads the tests, such as the `singlechecker`
+  or `multichecker` of `golang.org/x/tools`, whose `-test` defaults to true,
+  runs paircheck over it too, and a rule over a package `testing` imports,
+  which the project never sees, can fail the run there. Such a driver drops
+  the test main a loaded test variant is built for, or runs with `-test=false`.
 - `validate` loads the packages the rules name without their tests, whatever
   `--tests` or `run.tests` say: a rule naming a function or method declared in
   a `_test.go` file is refused as unknown, although the analysis applies it.
