@@ -61,6 +61,29 @@ var flagsOverRunTests = []struct {
 	{flag: "--tests=false", run: true, analyzed: false},
 }
 
+// flagsOverInvalidKeys write a flag over a key of run the file writes
+// wrongly: the flag replaces the key, which is then not read, as viper takes a
+// changed flag first.
+var flagsOverInvalidKeys = []struct {
+	name     string
+	run      map[string]any
+	flag     string
+	analyzed bool
+}{
+	{
+		name:     "tests",
+		run:      map[string]any{"tests": "sometimes"},
+		flag:     "--tests=false",
+		analyzed: false,
+	},
+	{
+		name:     "modules download mode",
+		run:      map[string]any{"modules-download-mode": []any{"vendor"}},
+		flag:     "--modules-download-mode=mod",
+		analyzed: true,
+	},
+}
+
 // buildTags write run.build-tags, weakly typed as golangci-lint reads it, and
 // --build-tags, which adds to it, with whether the package built only under
 // the precept tag is analyzed.

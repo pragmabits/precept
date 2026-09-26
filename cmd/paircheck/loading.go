@@ -34,32 +34,45 @@ type loading struct {
 	downloadMode string
 }
 
-// overridden is l with what the command line writes over it, as in
-// golangci-lint: --tests and --modules-download-mode replace the value, and
-// --build-tags adds tags. The mode is checked once both have written it.
-func (l loading) overridden(flags *pflag.FlagSet) (loading, error) {
+// loadingOf is the load that the run section of a golangci-lint configuration
+// and the command line ask for, as golangci-lint reads them. A flag written on
+// the command line replaces its key, which is then not read from the file, as
+// viper takes a changed flag first; --build-tags adds to run.build-tags, which
+// is read either way; and a key neither writes keeps its default. The mode is
+// checked once it is settled. The command's own file has no run section.
+func loadingOf(section map[string]any, flags *pflag.FlagSet) (loading, error) {
+	var load loading
 	var err error
 	if flags.Changed(flagTests) {
-		if l.tests, err = flags.GetBool(flagTests); err != nil {
-			return loading{}, err
-		}
+		load.tests, err = flags.GetBool(flagTests)
+	} else {
+		load.tests, err = testsOf(section[flagTests])
+	}
+	if err != nil {
+		return loading{}, err
+	}
+	if load.buildTags, err = tagsOf(section[flagBuildTags]); err != nil {
+		return loading{}, err
 	}
 	if flags.Changed(flagBuildTags) {
 		added, err := flags.GetStringSlice(flagBuildTags)
 		if err != nil {
 			return loading{}, err
 		}
-		l.buildTags = append(slices.Clone(l.buildTags), added...)
+		load.buildTags = append(load.buildTags, added...)
 	}
 	if flags.Changed(flagDownloadMode) {
-		if l.downloadMode, err = flags.GetString(flagDownloadMode); err != nil {
-			return loading{}, err
-		}
+		load.downloadMode, err = flags.GetString(flagDownloadMode)
+	} else {
+		load.downloadMode, err = modeOf(section[flagDownloadMode])
 	}
-	if !slices.Contains([]string{"", "mod", "readonly", "vendor"}, l.downloadMode) {
-		return loading{}, fmt.Errorf("%w: %s", errMode, l.downloadMode)
+	if err != nil {
+		return loading{}, err
 	}
-	return l, nil
+	if !slices.Contains([]string{"", "mod", "readonly", "vendor"}, load.downloadMode) {
+		return loading{}, fmt.Errorf("%w: %s", errMode, load.downloadMode)
+	}
+	return load, nil
 }
 
 // packagesConfig is what go/packages loads with: the tests, and the build

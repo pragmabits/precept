@@ -98,6 +98,21 @@ func TestGolangciFlagWinsOverRunTests(t *testing.T) {
 	}
 }
 
+// TestGolangciSkipsAKeyAFlagReplaces writes the flags of
+// TestCommandSkipsAKeyAFlagReplaces, with the same outcome.
+func TestGolangciSkipsAKeyAFlagReplaces(t *testing.T) {
+	for _, test := range flagsOverInvalidKeys {
+		t.Run(test.name, func(t *testing.T) {
+			config := golangciConfig(t, settingsOf(t, rules), test.run)
+			code, stdout, stderr := golangci(t, "run", "-c", config, test.flag, "./...")
+			if code != golangciIssues {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
+			}
+			compareWith(t, findings(t, stdout, " (paircheck)"), expected(t, test.analyzed, false))
+		})
+	}
+}
+
 // TestGolangciFollowsBuildTags reads each run.build-tags and --build-tags
 // TestCommandFollowsBuildTags writes, with the same outcome.
 func TestGolangciFollowsBuildTags(t *testing.T) {

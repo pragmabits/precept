@@ -80,6 +80,21 @@ func TestCommandFlagWinsOverRunTests(t *testing.T) {
 	}
 }
 
+// TestCommandSkipsAKeyAFlagReplaces writes a flag over a key the file writes
+// wrongly, and the file's key is not read.
+func TestCommandSkipsAKeyAFlagReplaces(t *testing.T) {
+	for _, test := range flagsOverInvalidKeys {
+		t.Run(test.name, func(t *testing.T) {
+			config := golangciConfig(t, settingsOf(t, rules), test.run)
+			code, stdout, stderr := execute(t, nil, command, "-c", config, test.flag, "./...")
+			if code != exitFindings {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+			}
+			compareWith(t, findings(t, stdout, ""), expected(t, test.analyzed, false))
+		})
+	}
+}
+
 // TestCommandFollowsBuildTags reads run.build-tags of a golangci-lint
 // configuration as golangci-lint does, and adds --build-tags to it.
 func TestCommandFollowsBuildTags(t *testing.T) {

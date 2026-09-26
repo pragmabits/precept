@@ -109,11 +109,11 @@ func dispatch(
 	if path == "" {
 		return exitFailed, errNoConfig
 	}
-	config, written, err := readConfig(path)
+	config, section, err := readConfig(path)
 	if err != nil {
 		return exitFailed, err
 	}
-	load, err := written.overridden(flags)
+	load, err := loadingOf(section, flags)
 	if err != nil {
 		return exitFailed, err
 	}

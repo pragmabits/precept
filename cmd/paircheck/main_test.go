@@ -345,6 +345,35 @@ func TestValidateFollowsBuildTags(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDoesNotReadAKeyAWrittenFlagReplaces(t *testing.T) {
+	tests := []struct {
+		name string
+		run  string
+		flag string
+	}{
+		{name: "tests", run: "tests: sometimes", flag: "--tests=false"},
+		{name: "mode", run: "modules-download-mode: [vendor]", flag: "--modules-download-mode=mod"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "project"))
+			config := write(t, "run:\n  "+test.run+"\n"+`linters:
+  settings:
+    paircheck:
+      rules:
+        - id: resource
+          trigger: (*example.com/project/resource.Resource).Open
+          satisfiers: [(*example.com/project/resource.Resource).Close]
+`)
+			code, stdout, stderr := execute("--config", config, test.flag, "./...")
+			if code != exitFindings || !strings.Contains(stdout, leak) {
+				t.Errorf("exit = %d, stdout = %q, want %d and %q; stderr: %s",
+					code, stdout, exitFindings, leak, stderr)
+			}
+		})
+	}
+}
+
 func TestAnalyzeRefusesRunTests(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "project"))
 	config := write(t, `run:
