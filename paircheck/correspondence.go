@@ -98,12 +98,8 @@ func decompose(valueType types.Type) (shape, []types.Type, bool) {
 		built := shape{construction: constructionArray, length: composite.Len()}
 		return built, []types.Type{composite.Elem()}, true
 	case *types.Map:
-		return shape{
-			construction: constructionMap,
-		}, []types.Type{
-			composite.Key(),
-			composite.Elem(),
-		}, true
+		built := shape{construction: constructionMap}
+		return built, []types.Type{composite.Key(), composite.Elem()}, true
 	case *types.Chan:
 		built := shape{construction: constructionChannel, direction: composite.Dir()}
 		return built, []types.Type{composite.Elem()}, true
