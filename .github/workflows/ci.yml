@@ -33,7 +33,9 @@ jobs:
         with:
           go-version-file: ${{ matrix.go-version-file }}
           go-version: ${{ matrix.go-version }}
-      - run: go test -race ./...
+      # setup-go restores the build cache, test results included, and e2e/
+      # builds cmd/paircheck, which the cache cannot see: the tests always run.
+      - run: go test -race -count=1 ./...
 
   lint:
     runs-on: ubuntu-latest
@@ -44,10 +46,13 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # Installed only, so the gate runs the same commands as locally.
+      # Installed only, so the gate runs the same commands as locally. With
+      # goinstall, `go install` checks golangci-lint against sum.golang.org; the
+      # default mode downloads the release archive and checks nothing.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.13.2
+          version: v2.14.0
+          install-mode: goinstall
           install-only: true
       - run: go mod tidy -diff
       - run: golangci-lint config verify
@@ -55,3 +60,23 @@ jobs:
       # golangci-lint counts a test as use, so code only its own tests reach
       # passes the run above (.claude/rules/planning.md).
       - run: golangci-lint run --tests=false --enable-only unused ./...
+
+  # The end-to-end tests with golangci-lint built with the plugins, which the
+  # test job cannot run: the build clones golangci-lint, by a tag `make
+  # golangci` checks against the commit it pins.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # goinstall for the reason given in the lint job.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          install-mode: goinstall
+          install-only: true
+      - run: make e2e

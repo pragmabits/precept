@@ -2,7 +2,7 @@
 # from the local source. Not at the repository root: golangci-lint-action builds
 # a custom binary from a root .custom-gcl.yml in place of golangci-lint, and the
 # CI finds no golangci-lint to run.
-version: v2.13.2
+version: v2.14.0
 name: golangci-lint-precept
 plugins:
   - module: github.com/pragmabits/precept
