@@ -14,13 +14,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"go/types"
 	"io"
 	"os"
 	"runtime/debug"
 
+	"github.com/spf13/pflag"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/checker"
@@ -60,39 +60,37 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// run is the command: the analysis, or the validation when "validate" comes
-// first.
+// run is the command: the analysis, or the validation when "validate" is the
+// first argument that is not a flag. A bare "validate" is never a package
+// pattern: it would name a standard library package that does not exist.
 func run(arguments []string, stdout, stderr io.Writer) int {
-	validating := len(arguments) > 0 && arguments[0] == validation
-	if validating {
-		arguments = arguments[1:]
-	}
-	flags := flag.NewFlagSet(linterName, flag.ContinueOnError)
+	flags := pflag.NewFlagSet(linterName, pflag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
 		fmt.Fprint(flags.Output(), usage)
 	}
-	// One variable under two names is the shorthand the flag package
-	// documents; either name takes one dash or two.
-	var path string
-	flags.StringVar(&path, "config", "", "the rules")
-	flags.StringVar(&path, "c", "", "the rules (shorthand)")
-	var showVersion bool
-	flags.BoolVar(&showVersion, "version", false, "print the version and exit")
-	flags.BoolVar(&showVersion, "v", false, "print the version and exit (shorthand)")
+	path := flags.StringP("config", "c", "", "the rules")
+	showVersion := flags.BoolP("version", "v", false, "print the version and exit")
 	err := flags.Parse(arguments)
-	if errors.Is(err, flag.ErrHelp) {
+	if errors.Is(err, pflag.ErrHelp) {
 		return exitClean
 	}
 	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", linterName, err)
+		flags.Usage()
 		return exitFailed
 	}
-	if showVersion {
+	if *showVersion {
 		info, _ := debug.ReadBuildInfo()
 		fmt.Fprintln(stdout, version(info))
 		return exitClean
 	}
-	code, err := dispatch(validating, path, flags.Args(), stdout)
+	positional := flags.Args()
+	validating := len(positional) > 0 && positional[0] == validation
+	if validating {
+		positional = positional[1:]
+	}
+	code, err := dispatch(validating, *path, positional, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", linterName, err)
 	}
@@ -132,6 +130,9 @@ func analyze(config paircheck.Config, patterns []string, stdout io.Writer) (int,
 	if err != nil {
 		return exitFailed, err
 	}
+	if err := rootErrors(graph); err != nil {
+		return exitFailed, err
+	}
 	if err := graph.PrintText(stdout, -1); err != nil {
 		return exitFailed, err
 	}
@@ -162,17 +163,29 @@ func validate(config paircheck.Config) (int, error) {
 	return exitClean, nil
 }
 
-func outcome(graph *checker.Graph) int {
-	code := exitClean
+// rootErrors joins the distinct errors of the analyzed packages. A rule the
+// analyzer cannot bind fails every package that sees its functions, with the
+// same message.
+func rootErrors(graph *checker.Graph) error {
+	var problems []error
+	seen := make(map[string]bool)
 	for _, root := range graph.Roots {
-		if root.Err != nil {
-			return exitFailed
+		if root.Err == nil || seen[root.Err.Error()] {
+			continue
 		}
+		seen[root.Err.Error()] = true
+		problems = append(problems, root.Err)
+	}
+	return errors.Join(problems...)
+}
+
+func outcome(graph *checker.Graph) int {
+	for _, root := range graph.Roots {
 		if len(root.Diagnostics) > 0 {
-			code = exitFindings
+			return exitFindings
 		}
 	}
-	return code
+	return exitClean
 }
 
 func loadErrors(loaded []*packages.Package) error {

@@ -15,7 +15,7 @@ func TestAnalyzeReports(t *testing.T) {
 	for _, config := range []string{"rules.yml", "golangci-native.yml", "golangci-plugin.yml"} {
 		t.Run(config, func(t *testing.T) {
 			t.Chdir(filepath.Join("testdata", "project"))
-			code, stdout, stderr := execute("-config", config, "./...")
+			code, stdout, stderr := execute("--config", config, "./...")
 			if code != exitFindings {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 			}
@@ -28,15 +28,17 @@ func TestAnalyzeReports(t *testing.T) {
 
 func TestConfigSpellings(t *testing.T) {
 	spellings := [][]string{
-		{"-c", "rules.yml"},
-		{"--config", "rules.yml"},
-		{"--config=rules.yml"},
-		{"-config", "rules.yml"},
+		{"-c", "rules.yml", "./..."},
+		{"--config", "rules.yml", "./..."},
+		{"--config=rules.yml", "./..."},
+		{"./...", "-c", "rules.yml"},
+		{"./leak", "--config", "rules.yml", "./resource"},
+		{"-c", "rules.yml", "--", "./..."},
 	}
 	for _, spelling := range spellings {
 		t.Run(strings.Join(spelling, " "), func(t *testing.T) {
 			t.Chdir(filepath.Join("testdata", "project"))
-			code, stdout, stderr := execute(append(spelling, "./...")...)
+			code, stdout, stderr := execute(spelling...)
 			if code != exitFindings {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 			}
@@ -44,6 +46,16 @@ func TestConfigSpellings(t *testing.T) {
 				t.Errorf("stdout = %q, want it to contain %q", stdout, leak)
 			}
 		})
+	}
+}
+
+func TestUnknownFlag(t *testing.T) {
+	code, _, stderr := execute("--verbose", "./...")
+	if code != exitFailed {
+		t.Errorf("exit = %d, want %d", code, exitFailed)
+	}
+	if !strings.Contains(stderr, "--verbose") {
+		t.Errorf("stderr = %q, want it to name --verbose", stderr)
 	}
 }
 
@@ -67,7 +79,7 @@ func TestHelp(t *testing.T) {
 }
 
 func TestVersionFlag(t *testing.T) {
-	for _, spelling := range []string{"-v", "--v", "--version", "-version"} {
+	for _, spelling := range []string{"-v", "--version"} {
 		t.Run(spelling, func(t *testing.T) {
 			code, stdout, stderr := execute(spelling)
 			if code != exitClean {
@@ -108,12 +120,29 @@ func TestAnalyzeRefusesInvalidConfig(t *testing.T) {
     satisfiers: [(*example.com/project/resource.Resource).Close]
     transfer: true
 `)
-	code, _, stderr := execute("-config", config, "./...")
+	code, _, stderr := execute("--config", config, "./...")
 	if code != exitFailed {
 		t.Fatalf("exit = %d, want %d", code, exitFailed)
 	}
 	if !strings.Contains(stderr, "transfer") {
 		t.Errorf("stderr = %q, want it to name transfer", stderr)
+	}
+}
+
+func TestAnalyzeRefusesUnboundRule(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project"))
+	config := write(t, `rules:
+  - id: swap
+    trigger: (*example.com/project/resource.Cache).Swap
+    satisfiers: [(*example.com/project/resource.Cache).Put]
+`)
+	code, _, stderr := execute("--config", config, "./...")
+	if code != exitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
+	}
+	want := `rule "swap": more than one slot`
+	if strings.Count(stderr, want) != 1 {
+		t.Errorf("stderr = %q, want %q once", stderr, want)
 	}
 }
 
@@ -123,9 +152,17 @@ func TestRequiresConfig(t *testing.T) {
 	}
 }
 
+func TestValidateAfterFlags(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project"))
+	code, _, stderr := execute("--config", "rules.yml", "validate")
+	if code != exitClean {
+		t.Errorf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
+	}
+}
+
 func TestValidateAccepts(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "project"))
-	code, _, stderr := execute("validate", "-config", "rules.yml")
+	code, _, stderr := execute("validate", "--config", "rules.yml")
 	if code != exitClean {
 		t.Errorf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
 	}
@@ -178,7 +215,7 @@ func TestValidateRefuses(t *testing.T) {
 		t.Run(test.defect, func(t *testing.T) {
 			t.Chdir(filepath.Join("testdata", "project"))
 			config := write(t, "rules:\n  - id: broken\n    "+test.rule+"\n")
-			code, _, stderr := execute("validate", "-config", config)
+			code, _, stderr := execute("validate", "--config", config)
 			if code != exitFailed {
 				t.Fatalf("exit = %d, want %d", code, exitFailed)
 			}
