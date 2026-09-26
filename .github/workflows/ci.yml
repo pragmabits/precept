@@ -43,9 +43,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # gofmt and golines format as the Go golangci-lint is built with, and a
+      # build with the go.mod Go formats some lines unlike the release binaries
+      # and a developer's own install, both built with the latest Go.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: stable
       # Installed only, so the gate runs the same commands as locally. With
       # goinstall, `go install` checks golangci-lint against sum.golang.org; the
       # default mode downloads the release archive and checks nothing.
