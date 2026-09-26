@@ -53,6 +53,13 @@ func passed() {
 	finish(conn)
 }
 
+// passedInDefer hands the value to a helper that runs at exit: a deferred call
+// is a call, and its argument takes the obligation along.
+func passedInDefer() {
+	conn := resource.Dial()
+	defer finish(conn)
+}
+
 func finish(conn *resource.Conn) {
 	_ = conn.Close()
 }

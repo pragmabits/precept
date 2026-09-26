@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"go/types"
+	"slices"
 
 	"golang.org/x/tools/go/ssa"
 )
@@ -19,10 +20,14 @@ var (
 
 var errorType = types.Universe.Lookup("error").Type()
 
-// candidate is a slot that can carry the value, with the type it has there.
+// candidate is a slot that can carry the value, with the type it has there,
+// and whether the rule wrote that slot. A called candidate is the call
+// satisfier's: it takes any function.
 type candidate struct {
 	slot      slot
 	valueType types.Type
+	written   bool
+	called    bool
 }
 
 // binding is a protocol resolved in one pass: the slot carrying the value on
@@ -31,18 +36,41 @@ type candidate struct {
 // cannot see keeps the zero slot; the pass cannot call it.
 type binding struct {
 	protocol       protocol
+	valueType      types.Type
 	triggerSlot    slot
 	satisfierSlots []slot
 	satisfiers     []*types.Func
 	failure        int
 }
 
-// bind resolves current against the packages visible from a pass. It reports
-// false when the trigger is not visible, or when the types do not settle one
-// slot on each visible side.
-func bind(current protocol, visible map[string]*types.Package) (binding, bool) {
+// bind resolves current against the packages visible from a pass. A pass that
+// sees only some of the functions current names skips a rule it cannot
+// resolve, since a satisfier it does not see may be what settles the slot. A
+// pass that sees all of them knows what Validate knows, and a rule it cannot
+// resolve is an error.
+func bind(current protocol, visible map[string]*types.Package) (binding, bool, error) {
 	resolved, err := resolve(current, visible, false)
-	return resolved, err == nil
+	if err == nil {
+		return resolved, true, nil
+	}
+	if !seesAll(visible, current) {
+		return binding{}, false, nil
+	}
+	return binding{}, false, fmt.Errorf("rule %q: %w", current.id, err)
+}
+
+// seesAll reports whether every function current names is in the visible
+// packages.
+func seesAll(visible map[string]*types.Package, current protocol) bool {
+	if lookupFunc(visible, current.trigger.name) == nil {
+		return false
+	}
+	for _, satisfier := range current.satisfiers {
+		if !satisfier.called && lookupFunc(visible, satisfier.name) == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // resolve binds current against the visible packages, or says why it cannot.
@@ -61,6 +89,11 @@ func resolve(
 	seen := make([]bool, len(current.satisfiers))
 	satisfiers := make([]*types.Func, len(current.satisfiers))
 	for index, satisfier := range current.satisfiers {
+		if satisfier.called {
+			seen[index] = true
+			closing[index] = []candidate{{slot: slot{kind: slotCallee}, called: true}}
+			continue
+		}
 		offered, function, err := offeredBy(visible, satisfier, false)
 		if errors.Is(err, ErrUnknownFunction) && !strict {
 			continue
@@ -72,11 +105,11 @@ func resolve(
 		closing[index] = offered
 		satisfiers[index] = function
 	}
-	valueType, err := linkingType(opening, closing, seen)
+	link, err := linkingType(opening, closing, seen)
 	if err != nil {
 		return binding{}, err
 	}
-	resolved, err := settle(current, valueType, opening, closing, seen)
+	resolved, err := settle(current, link, opening, closing, seen)
 	if err != nil {
 		return binding{}, err
 	}
@@ -108,17 +141,18 @@ func offeredBy(
 
 func settle(
 	current protocol,
-	valueType types.Type,
+	link candidate,
 	opening []candidate,
 	closing [][]candidate,
 	seen []bool,
 ) (binding, error) {
-	triggerSlot, err := only(opening, valueType)
+	triggerSlot, err := only(opening, link)
 	if err != nil {
 		return binding{}, fmt.Errorf("trigger %s: %w", current.trigger.name, err)
 	}
 	resolved := binding{
 		protocol:       current,
+		valueType:      link.valueType,
 		triggerSlot:    triggerSlot,
 		satisfierSlots: make([]slot, len(closing)),
 	}
@@ -126,7 +160,7 @@ func settle(
 		if !seen[index] {
 			continue
 		}
-		resolved.satisfierSlots[index], err = only(offered, valueType)
+		resolved.satisfierSlots[index], err = only(offered, link)
 		if err != nil {
 			return binding{}, fmt.Errorf("satisfier %s: %w", current.satisfiers[index].name, err)
 		}
@@ -164,6 +198,9 @@ func (b binding) satisfierOf(common *ssa.CallCommon) (int, bool) {
 	if index, ok := b.protocol.satisfiedBy(common); ok {
 		return index, true
 	}
+	if index, ok := b.calledBy(common); ok {
+		return index, true
+	}
 	if !common.IsInvoke() {
 		return 0, false
 	}
@@ -177,6 +214,30 @@ func (b binding) satisfierOf(common *ssa.CallCommon) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// calledBy reports which satisfier common is when it is a call of a function
+// value of the value's own type: the call satisfier. A function value of
+// another type, such as a callback, is not the value.
+func (b binding) calledBy(common *ssa.CallCommon) (int, bool) {
+	if common.IsInvoke() || common.StaticCallee() != nil {
+		return 0, false
+	}
+	if !types.Identical(common.Value.Type(), b.valueType) {
+		return 0, false
+	}
+	index := slices.IndexFunc(b.protocol.satisfiers, func(current side) bool {
+		return current.called
+	})
+	return index, index >= 0
+}
+
+func isFunction(valueType types.Type) bool {
+	if valueType == nil {
+		return false
+	}
+	_, ok := valueType.Underlying().(*types.Signature)
+	return ok
 }
 
 func dispatchesTo(method *types.Func, contract *types.Interface, satisfier *types.Func) bool {
@@ -197,70 +258,103 @@ func (b binding) failureAt(call *ssa.Call) ssa.Value {
 }
 
 // linkingType is the one type offered by the trigger and by every satisfier
-// the pass can see.
-func linkingType(opening []candidate, closing [][]candidate, seen []bool) (types.Type, error) {
-	var linking []types.Type
+// the pass can see, as the trigger's candidate that carries it.
+func linkingType(opening []candidate, closing [][]candidate, seen []bool) (candidate, error) {
+	var linking []candidate
 	for _, offered := range opening {
-		if containsType(linking, offered.valueType) {
+		if containsLink(linking, offered) {
 			continue
 		}
-		if offeredByAll(closing, seen, offered.valueType) {
-			linking = append(linking, offered.valueType)
+		if offeredByAll(closing, seen, offered) {
+			linking = append(linking, offered)
 		}
 	}
 	switch len(linking) {
 	case 0:
-		return nil, ErrNoLinkingType
+		return candidate{}, noLink(opening, closing)
 	case 1:
 		return linking[0], nil
 	}
-	return nil, ErrAmbiguousSlot
+	return candidate{}, ErrAmbiguousSlot
 }
 
-func offeredByAll(closing [][]candidate, seen []bool, valueType types.Type) bool {
+// noLink is ErrNoLinkingType, saying why when a type parameter sits in a slot
+// the rule did not write.
+func noLink(opening []candidate, closing [][]candidate) error {
+	unwritten := func(offered candidate) bool {
+		return !offered.written && mentionsTypeParameter(offered.valueType)
+	}
+	if slices.ContainsFunc(opening, unwritten) ||
+		slices.ContainsFunc(slices.Concat(closing...), unwritten) {
+		return fmt.Errorf(
+			"%w: a type parameter links only through a slot written on each side",
+			ErrNoLinkingType,
+		)
+	}
+	return ErrNoLinkingType
+}
+
+func offeredByAll(closing [][]candidate, seen []bool, link candidate) bool {
 	for index, offered := range closing {
-		if seen[index] && !offers(offered, valueType) {
+		if seen[index] && !offers(offered, link) {
 			return false
 		}
 	}
 	return true
 }
 
-func offers(offered []candidate, valueType types.Type) bool {
-	_, found := find(offered, valueType)
+func offers(offered []candidate, link candidate) bool {
+	_, found := find(offered, link)
 	return found
 }
 
-// only is the slot of the one candidate of valueType.
-func only(offered []candidate, valueType types.Type) (slot, error) {
-	position, found := find(offered, valueType)
+// only is the slot of the one candidate that links with link.
+func only(offered []candidate, link candidate) (slot, error) {
+	position, found := find(offered, link)
 	if !found {
 		return slot{}, ErrNoLinkingType
 	}
 	for _, other := range offered[position+1:] {
-		if sameType(other.valueType, valueType) {
+		if links(other, link) {
 			return slot{}, ErrAmbiguousSlot
 		}
 	}
 	return offered[position].slot, nil
 }
 
-func find(offered []candidate, valueType types.Type) (int, bool) {
+func find(offered []candidate, link candidate) (int, bool) {
 	for position, current := range offered {
-		if sameType(current.valueType, valueType) {
+		if links(current, link) {
 			return position, true
 		}
 	}
 	return 0, false
 }
 
-func containsType(list []types.Type, valueType types.Type) bool {
+func containsLink(list []candidate, link candidate) bool {
 	for _, current := range list {
-		if sameType(current, valueType) {
+		if links(current, link) {
 			return true
 		}
 	}
 	return false
+}
+
+// links reports whether two candidates can carry the same value: they have the
+// same type or, in slots the rule wrote on both sides, types that differ only
+// in type parameters that correspond one to one.
+func links(first, second candidate) bool {
+	switch {
+	case first.called:
+		return isFunction(second.valueType)
+	case second.called:
+		return isFunction(first.valueType)
+	}
+	if first.written && second.written &&
+		(mentionsTypeParameter(first.valueType) || mentionsTypeParameter(second.valueType)) {
+		return correspond(dereference(first.valueType), dereference(second.valueType))
+	}
+	return sameType(first.valueType, second.valueType)
 }
 
 // candidates lists the slots of function that can carry the value: the
@@ -270,11 +364,14 @@ func candidates(function *types.Func, withResults bool) []candidate {
 	signature := function.Signature()
 	offered := make([]candidate, 0, signature.Params().Len()+signature.Results().Len()+1)
 	if receiver := signature.Recv(); receiver != nil {
-		offered = append(offered, candidate{slot{kind: slotReceiver}, receiver.Type()})
+		offered = append(offered, candidate{slot: slot{kind: slotReceiver}, valueType: receiver.Type()})
 	}
 	for index := range signature.Params().Len() {
 		parameter := signature.Params().At(index)
-		offered = append(offered, candidate{slot{kind: slotArgument, index: index}, parameter.Type()})
+		offered = append(offered, candidate{
+			slot:      slot{kind: slotArgument, index: index},
+			valueType: parameter.Type(),
+		})
 	}
 	if !withResults {
 		return offered
@@ -286,22 +383,50 @@ func candidates(function *types.Func, withResults bool) []candidate {
 	}
 	for index := range count {
 		result := results.At(index)
-		offered = append(offered, candidate{slot{kind: slotResult, index: index}, result.Type()})
+		offered = append(offered, candidate{
+			slot:      slot{kind: slotResult, index: index},
+			valueType: result.Type(),
+		})
 	}
 	return offered
 }
 
+// restrict keeps the candidates the rule allows: the slot it wrote, or, when it
+// wrote none, every candidate but a context.
 func restrict(offered []candidate, wanted slot) []candidate {
 	if wanted.kind == slotNone {
-		return offered
+		return deducible(offered)
 	}
 	kept := make([]candidate, 0, 1)
 	for _, current := range offered {
 		if current.slot == wanted {
+			current.written = true
 			kept = append(kept, current)
 		}
 	}
 	return kept
+}
+
+// deducible drops the candidates of type context.Context. A context is passed
+// along nearly every call of an API, so it would link most triggers to their
+// satisfiers beside the value; a rule on the context itself writes its slots.
+func deducible(offered []candidate) []candidate {
+	kept := make([]candidate, 0, len(offered))
+	for _, current := range offered {
+		if !isContext(current.valueType) {
+			kept = append(kept, current)
+		}
+	}
+	return kept
+}
+
+func isContext(valueType types.Type) bool {
+	named, ok := types.Unalias(valueType).(*types.Named)
+	if !ok {
+		return false
+	}
+	object := named.Obj()
+	return object.Pkg() != nil && object.Pkg().Path() == "context" && object.Name() == "Context"
 }
 
 // sameType compares two types without one level of pointer, since a method

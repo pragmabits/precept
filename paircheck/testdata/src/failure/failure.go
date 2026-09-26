@@ -89,3 +89,40 @@ func storedError(r *resource.Resource) (err error) {
 	defer r.Stop()
 	return nil
 }
+
+func step() error { return nil }
+
+// reassignedError keeps the error in a variable a deferred closure reads, and
+// stores another error in it before a check: that check is not about Start.
+func reassignedError(r *resource.Resource) (err error) {
+	defer func() {
+		_ = err
+	}()
+	if err = r.Start(); err != nil { // want `\[start\] Start requires Stop on r before function exit`
+		return err
+	}
+	if err = step(); err != nil {
+		return err
+	}
+	r.Stop()
+	return nil
+}
+
+// reassignedOnOnePath stores another error on one path only: past the retry,
+// the check reads Start's error on one path and step's on the other.
+func reassignedOnOnePath(r *resource.Resource, retry bool) (err error) {
+	defer func() {
+		_ = err
+	}()
+	if err = r.Start(); err != nil { // want `\[start\] Start requires Stop on r before function exit`
+		return err
+	}
+	if retry {
+		err = step()
+	}
+	if err != nil {
+		return err
+	}
+	r.Stop()
+	return nil
+}

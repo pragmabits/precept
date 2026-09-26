@@ -1,6 +1,8 @@
 package paircheck_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/analysis"
@@ -50,12 +52,84 @@ func TestShapes(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), analyzer, "shapes")
 }
 
-func TestAmbiguousSlotIsSilent(t *testing.T) {
+func TestUnboundRuleFails(t *testing.T) {
+	tests := []struct {
+		defect string
+		rule   paircheck.Rule
+		want   string
+	}{
+		{
+			defect: "ambiguous slot",
+			rule:   rule("swap", "(*resource.Cache).Swap", "(*resource.Cache).Put"),
+			want:   `rule "swap": ` + paircheck.ErrAmbiguousSlot.Error(),
+		},
+		{
+			defect: "only a context in common",
+			rule:   rule("scope", "resource.Enter", "resource.Leave"),
+			want:   `rule "scope": ` + paircheck.ErrNoLinkingType.Error(),
+		},
+		{
+			defect: "type parameter without slots",
+			rule:   rule("hold", "resource.Hold", "resource.Free"),
+			want: `rule "hold": ` + paircheck.ErrNoLinkingType.Error() +
+				": a type parameter links only through a slot written on each side",
+		},
+		{
+			defect: "type parameter in a slice without slots",
+			rule:   rule("all", "resource.HoldAll", "resource.FreeAll"),
+			want: `rule "all": ` + paircheck.ErrNoLinkingType.Error() +
+				": a type parameter links only through a slot written on each side",
+		},
+		{
+			defect: "type parameters that do not correspond",
+			rule:   written(rule("crossed", "resource.Crossed", "resource.Unlock")),
+			want:   `rule "crossed": ` + paircheck.ErrNoLinkingType.Error(),
+		},
+		{
+			defect: "type parameters in different shapes",
+			rule:   written(rule("shapes", "resource.HoldAll", "resource.Unlock")),
+			want:   `rule "shapes": ` + paircheck.ErrNoLinkingType.Error(),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.defect, func(t *testing.T) {
+			var reported recorder
+			analyzer := build(t, test.rule)
+			analysistest.Run(&reported, analysistest.TestData(), analyzer, "ambiguous")
+			if len(reported.errors) != 1 || !strings.HasSuffix(reported.errors[0], test.want) {
+				t.Errorf("errors = %q, want one ending in %q", reported.errors, test.want)
+			}
+		})
+	}
+}
+
+func TestTypeParameter(t *testing.T) {
+	rules := []paircheck.Rule{
+		rule("hold", "resource.Hold", "resource.Free"),
+		rule("all", "resource.HoldAll", "resource.FreeAll"),
+		rule("entries", "resource.Lock", "resource.Unlock"),
+	}
+	for index := range rules {
+		rules[index].Trigger.Slot = "argument 0"
+		rules[index].Satisfiers[0].Slot = "argument 0"
+	}
+	analysistest.Run(t, analysistest.TestData(), build(t, rules...), "generic")
+}
+
+func TestContext(t *testing.T) {
+	scope := rule("scope", "resource.Enter", "resource.Leave")
+	scope.Trigger.Slot = "result 0"
+	scope.Satisfiers[0].Slot = "argument 0"
 	analyzer := build(t,
-		rule("swap", "(*resource.Cache).Swap", "(*resource.Cache).Put"),
-		rule("dial", "resource.Dial", "(*resource.Conn).Close"),
+		rule(
+			"session",
+			"(*resource.Store).Begin",
+			"(*resource.Session).Commit",
+			"(*resource.Session).Rollback",
+		),
+		scope,
 	)
-	analysistest.Run(t, analysistest.TestData(), analyzer, "ambiguous")
+	analysistest.Run(t, analysistest.TestData(), analyzer, "contexts")
 }
 
 func TestInvisibleSatisfier(t *testing.T) {
@@ -115,6 +189,51 @@ func TestDeferredClosure(t *testing.T) {
 	}
 }
 
+func TestRequireDefer(t *testing.T) {
+	transaction := rule(
+		"transaction",
+		"(*resource.DB).Begin",
+		"(*resource.Tx).Commit",
+		"(*resource.Tx).Rollback",
+	)
+	transaction.RequireDefer = true
+	lock := rule("lock", "(*sync.Mutex).Lock", "(*sync.Mutex).Unlock")
+	lock.RequireDefer = true
+	analysistest.Run(t, analysistest.TestData(), build(t, transaction, lock), "requiredefer")
+}
+
+func TestFunctionValue(t *testing.T) {
+	analyzer := build(t,
+		rule("dial", "resource.Dial", "(*resource.Conn).Close"),
+		rule("acquire", "(*resource.Semaphore).Acquire", "call"),
+	)
+	analysistest.Run(t, analysistest.TestData(), analyzer, "funcvalue")
+}
+
+func TestDeferFirst(t *testing.T) {
+	rules := []paircheck.Rule{
+		rule("transaction", "(*resource.DB).Begin", "(*resource.Tx).Commit", "(*resource.Tx).Rollback"),
+		rule("lock", "(*sync.Mutex).Lock", "(*sync.Mutex).Unlock"),
+		rule(
+			"session",
+			"(*resource.Store).Begin",
+			"(*resource.Session).Commit",
+			"(*resource.Session).Rollback",
+		),
+	}
+	for index := range rules {
+		rules[index].DeferFirst = true
+	}
+	analysistest.Run(t, analysistest.TestData(), build(t, rules...), "deferfirst")
+}
+
+func TestIdempotent(t *testing.T) {
+	counted := rule("counted", "(*resource.Server).Serve", "(*resource.Server).Shutdown")
+	idempotent := rule("idempotent", "(*resource.Server).Serve", "(*resource.Server).Shutdown")
+	idempotent.Idempotent = true
+	analysistest.Run(t, analysistest.TestData(), build(t, counted, idempotent), "idempotent")
+}
+
 func TestExits(t *testing.T) {
 	analyzer := build(t, rule("resource", "(*resource.Resource).Open", "(*resource.Resource).Close"))
 	analysistest.Run(t, analysistest.TestData(), analyzer, "exits")
@@ -141,6 +260,24 @@ func TestTransfer(t *testing.T) {
 			analysistest.Run(t, analysistest.TestData(), build(t, current), pattern)
 		})
 	}
+}
+
+// written names argument 0 as the slot of the trigger and of the first
+// satisfier.
+func written(current paircheck.Rule) paircheck.Rule {
+	current.Trigger.Slot = "argument 0"
+	current.Satisfiers[0].Slot = "argument 0"
+	return current
+}
+
+// recorder keeps what analysistest reports, for a case that expects the
+// analysis to fail.
+type recorder struct {
+	errors []string
+}
+
+func (r *recorder) Errorf(format string, arguments ...any) {
+	r.errors = append(r.errors, fmt.Sprintf(format, arguments...))
 }
 
 func build(t *testing.T, rules ...paircheck.Rule) *analysis.Analyzer {

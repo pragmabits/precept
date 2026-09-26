@@ -2,6 +2,7 @@ package paircheck
 
 import (
 	"fmt"
+	"go/types"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,9 @@ const (
 	slotReceiver
 	slotArgument
 	slotResult
+	// slotCallee is the function a call calls: the value, for the call
+	// satisfier.
+	slotCallee
 )
 
 // slot is where the value sits in a call: the receiver, an argument, or a
@@ -55,6 +59,10 @@ func (s slot) valueAt(instruction ssa.CallInstruction) ssa.Value {
 		if call, ok := instruction.(*ssa.Call); ok {
 			return resultOf(call, s.index)
 		}
+	case slotCallee:
+		if !common.IsInvoke() {
+			return common.Value
+		}
 	}
 	return nil
 }
@@ -63,10 +71,28 @@ func receiverOf(common *ssa.CallCommon) ssa.Value {
 	if common.IsInvoke() {
 		return common.Value
 	}
+	if receiver, ok := boundReceiver(common.Value); ok {
+		return receiver
+	}
 	if common.Signature().Recv() == nil || len(common.Args) == 0 {
 		return nil
 	}
 	return common.Args[0]
+}
+
+// boundReceiver is the receiver a method value holds: the one value bound by
+// the closure SSA builds around a method, which calls it on that receiver.
+func boundReceiver(value ssa.Value) (ssa.Value, bool) {
+	closure, ok := value.(*ssa.MakeClosure)
+	if !ok || len(closure.Bindings) != 1 {
+		return nil, false
+	}
+	function, ok := closure.Fn.(*ssa.Function)
+	if !ok {
+		return nil, false
+	}
+	method, ok := function.Object().(*types.Func)
+	return closure.Bindings[0], ok && method.Signature().Recv() != nil
 }
 
 func argumentOf(common *ssa.CallCommon, index int) ssa.Value {

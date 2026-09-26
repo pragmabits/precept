@@ -87,6 +87,7 @@ func TestNewRefusesMalformedNames(t *testing.T) {
 		"(**resource.Resource).Open",
 		"(*resource.Pool[T).Acquire",
 		"resource.1Open",
+		"example.com/project/generic.Open[T]",
 	}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
@@ -106,6 +107,7 @@ func TestNewAcceptsEverySpelling(t *testing.T) {
 		"(*example.com/project/resource.Resource).Open",
 		"(example.com/project/resource.Resource).Open",
 		"(*example.com/project/pool.Pool[T]).Acquire",
+		"(*example.com/project/pool.Cache[K, V]).Close",
 		"(*gopkg.in/yaml.v3.Decoder).Decode",
 		"gopkg.in/yaml.v3.Unmarshal",
 	}
@@ -183,6 +185,55 @@ func TestCallDecodesBothForms(t *testing.T) {
 		if got[index] != want[index] {
 			t.Errorf("name %d = %q, want %q", index, got[index], want[index])
 		}
+	}
+}
+
+func TestRequireDeferDecodes(t *testing.T) {
+	const document = `{"id": "lock", "trigger": "(*sync.Mutex).Lock", "require-defer": true}`
+	var decoded paircheck.Rule
+	if err := json.Unmarshal([]byte(document), &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !decoded.RequireDefer {
+		t.Error("RequireDefer = false, want true")
+	}
+}
+
+func TestNewAcceptsTheCallSatisfier(t *testing.T) {
+	config := valid()
+	config.Rules[0].Satisfiers = []paircheck.Call{{Name: "call"}}
+	if _, err := paircheck.New(config); err != nil {
+		t.Errorf("New() error = %v, want nil", err)
+	}
+}
+
+func TestNewRefusesASlotOnCall(t *testing.T) {
+	config := valid()
+	config.Rules[0].Satisfiers = []paircheck.Call{{Name: "call", Slot: "argument 0"}}
+	if _, err := paircheck.New(config); !errors.Is(err, paircheck.ErrCallSlot) {
+		t.Errorf("New() error = %v, want %v", err, paircheck.ErrCallSlot)
+	}
+}
+
+func TestDeferFirstDecodes(t *testing.T) {
+	const document = `{"id": "lock", "trigger": "(*sync.Mutex).Lock", "defer-first": true}`
+	var decoded paircheck.Rule
+	if err := json.Unmarshal([]byte(document), &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !decoded.DeferFirst {
+		t.Error("DeferFirst = false, want true")
+	}
+}
+
+func TestIdempotentDecodes(t *testing.T) {
+	const document = `{"id": "serve", "trigger": "(*net/http.Server).Serve", "idempotent": true}`
+	var decoded paircheck.Rule
+	if err := json.Unmarshal([]byte(document), &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !decoded.Idempotent {
+		t.Error("Idempotent = false, want true")
 	}
 }
 

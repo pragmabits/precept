@@ -1,6 +1,7 @@
 package paircheck
 
 import (
+	"go/types"
 	"slices"
 
 	"golang.org/x/tools/go/ssa"
@@ -53,9 +54,23 @@ func (s search) passedAway(instruction ssa.Instruction) bool {
 	case *ssa.Go:
 		return s.anyCarries(operandsOf(typed.Common()))
 	case *ssa.MakeClosure:
-		return !deferredOnly(typed) && s.anyCarries(typed.Bindings)
+		return !deferredOnly(typed) && !s.boundSatisfier(typed) && s.anyCarries(typed.Bindings)
 	}
 	return false
+}
+
+// boundSatisfier reports whether closure is a method value of a satisfier: it
+// does not hand the value to other code, it is the satisfier, waiting.
+func (s search) boundSatisfier(closure *ssa.MakeClosure) bool {
+	if _, ok := boundReceiver(closure); !ok {
+		return false
+	}
+	method, ok := closure.Fn.(*ssa.Function).Object().(*types.Func)
+	if !ok {
+		return false
+	}
+	_, named := s.binding.protocol.satisfierNamed(method)
+	return named
 }
 
 // handsOver reports whether a call passes the value as an argument. The
@@ -96,7 +111,8 @@ func (s search) anyCarries(values []ssa.Value) bool {
 }
 
 // carries reports whether candidate may be the value, or the address of a
-// variable holding it. A candidate of unknown identity carries it only when it
+// variable holding it, or a method value of a satisfier bound to it, which
+// stands for the value. A candidate of unknown identity carries it only when it
 // has its type: every other value a function returns or passes is not it.
 func (s search) carries(candidate ssa.Value) bool {
 	if candidate == nil || s.opened.value == nil {
@@ -107,6 +123,9 @@ func (s search) carries(candidate ssa.Value) bool {
 	}
 	if s.holds(candidate) {
 		return true
+	}
+	if closure, ok := candidate.(*ssa.MakeClosure); ok && s.boundSatisfier(closure) {
+		return s.carries(closure.Bindings[0])
 	}
 	switch s.binding.compare(candidate, s.opened.value) {
 	case sameYes:

@@ -44,6 +44,16 @@ func (f failure) is(operand ssa.Value) bool {
 	return ok && load.Op == token.MUL && slices.Contains(f.homes, load.X)
 }
 
+// readAt is f as a check reads it at a point of the search: once another value
+// displaced the error from its variables, a load of one of them is not the
+// error.
+func (f failure) readAt(displaced bool) failure {
+	if displaced {
+		f.homes = nil
+	}
+	return f
+}
+
 func (f failure) verdictOf(condition ssa.Value) verdict {
 	if comparison, ok := condition.(*ssa.BinOp); ok && f.comparedToNil(comparison) {
 		if comparison.Op == token.NEQ {

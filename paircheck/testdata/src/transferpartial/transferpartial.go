@@ -24,6 +24,11 @@ func passed() {
 	finish(conn)
 }
 
+func passedInDefer() {
+	conn := resource.Dial() // want `\[dial\] Dial requires Close on conn before function exit`
+	defer finish(conn)
+}
+
 func finish(conn *resource.Conn) {
 	_ = conn.Close()
 }

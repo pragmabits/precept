@@ -42,7 +42,9 @@ func Packages(config Config) ([]string, error) {
 	for _, current := range protocols {
 		paths = append(paths, current.trigger.name.path)
 		for _, satisfier := range current.satisfiers {
-			paths = append(paths, satisfier.name.path)
+			if !satisfier.called {
+				paths = append(paths, satisfier.name.path)
+			}
 		}
 	}
 	slices.Sort(paths)

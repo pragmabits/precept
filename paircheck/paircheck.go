@@ -1,6 +1,6 @@
 // Package paircheck reports a call that opens an obligation on a value when a
-// path leaves the function before a call that discharges it, for pairs of
-// functions and methods the configuration declares.
+// path returns from the function before a call that discharges it, for pairs
+// of functions and methods the configuration declares.
 package paircheck
 
 import (
@@ -40,7 +40,11 @@ func check(pass *analysis.Pass, protocols []protocol) error {
 	visible := visiblePackages(pass.Pkg)
 	bindings := make([]binding, 0, len(protocols))
 	for _, current := range protocols {
-		if resolved, found := bind(current, visible); found {
+		resolved, found, err := bind(current, visible)
+		if err != nil {
+			return err
+		}
+		if found {
 			bindings = append(bindings, resolved)
 		}
 	}
@@ -60,8 +64,8 @@ func checkFunction(
 	function *ssa.Function,
 ) {
 	for _, opened := range current.obligations(function) {
-		if (search{binding: current, opened: opened}).leaks() {
-			source.report(pass, current, opened)
+		if found := (search{binding: current, opened: opened}).leaks(); found != leakNone {
+			source.report(pass, current, opened, found)
 		}
 	}
 }

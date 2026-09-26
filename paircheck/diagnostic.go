@@ -64,14 +64,17 @@ func (s syntax) assign(targets, values []ast.Expr) {
 	}
 }
 
-func (s syntax) report(pass *analysis.Pass, violated binding, opened obligation) {
+func (s syntax) report(pass *analysis.Pass, violated binding, opened obligation, found leak) {
 	position := opened.call.Pos()
 	expression := unnamed
 	if call, ok := s.calls[position]; ok {
 		position = call.Pos()
 		expression = s.expression(call, violated.triggerSlot)
 	}
-	pass.Report(analysis.Diagnostic{Pos: position, Message: message(violated.protocol, expression)})
+	pass.Report(analysis.Diagnostic{
+		Pos:     position,
+		Message: message(violated.protocol, expression, found),
+	})
 }
 
 // expression spells the value a call carries in a slot.
@@ -105,23 +108,30 @@ func (s syntax) result(call *ast.CallExpr, index int) string {
 	return types.ExprString(targets[index])
 }
 
-func message(violated protocol, expression string) string {
+// message says what the path left undone: the satisfier before the return, or,
+// under defer-first, the deferred satisfier before any other call.
+func message(violated protocol, expression string, found leak) string {
+	deadline := "before function exit"
+	if found == leakBeforeDefer {
+		deadline = "deferred before any other call"
+	}
 	return fmt.Sprintf(
-		"[%s] %s requires %s on %s before function exit",
+		"[%s] %s requires %s on %s %s",
 		violated.id,
 		violated.trigger.name.name,
 		required(violated.satisfiers),
 		expression,
+		deadline,
 	)
 }
 
 func required(satisfiers []side) string {
 	if len(satisfiers) == 1 {
-		return satisfiers[0].name.name
+		return satisfiers[0].display()
 	}
 	names := make([]string, 0, len(satisfiers))
 	for _, satisfier := range satisfiers {
-		names = append(names, satisfier.name.name)
+		names = append(names, satisfier.display())
 	}
 	return "one of [" + strings.Join(names, ", ") + "]"
 }

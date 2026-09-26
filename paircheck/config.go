@@ -18,7 +18,12 @@ var (
 	ErrInvalidSlot     = errors.New(`slot is not "receiver", "argument N" or "result N"`)
 	ErrUnknownCoverage = errors.New(`deferred-closure is not "any-path", "every-path" or "none"`)
 	ErrUnknownTransfer = errors.New(`transfer is not "all", "none" or an object`)
+	ErrCallSlot        = errors.New("the call satisfier takes no slot")
 )
+
+// callSatisfier is the satisfier that calls the value itself, when the value is
+// a function. It never collides with a name: a name is qualified.
+const callSatisfier = "call"
 
 // Call names a function or method as types.Func.FullName spells it, and the
 // slot carrying the value when the types leave more than one. In a
@@ -26,6 +31,18 @@ var (
 type Call struct {
 	Name string `json:"name"`
 	Slot string `json:"slot"`
+}
+
+// compileSatisfier is compile, where the word call also stands for the
+// satisfier that calls the value itself, which has no slot to name.
+func (c Call) compileSatisfier() (side, error) {
+	if c.Name != callSatisfier {
+		return c.compile()
+	}
+	if c.Slot != "" {
+		return side{}, ErrCallSlot
+	}
+	return side{called: true}, nil
 }
 
 func (c Call) compile() (side, error) {
@@ -47,6 +64,7 @@ func (c *Call) UnmarshalJSON(data []byte) error {
 	return decodeTextOrObject(data, c.UnmarshalText, (*plain)(c), ErrInvalidName)
 }
 
+// UnmarshalText takes the name alone, and leaves the slot to deduction.
 func (c *Call) UnmarshalText(text []byte) error {
 	c.Name = string(text)
 	return nil
@@ -128,6 +146,20 @@ type Rule struct {
 	// Transfer says through which exits the value takes the obligation with
 	// it out of the function.
 	Transfer Transfer `json:"transfer"`
+
+	// RequireDefer counts only a deferred satisfier: one called on the path
+	// does not discharge the obligation, since a panic before it would leave
+	// the obligation open.
+	RequireDefer bool `json:"require-defer"`
+
+	// Idempotent makes a trigger on a value whose obligation is open open no
+	// other: a second Serve on a running server needs no second Shutdown.
+	Idempotent bool `json:"idempotent"`
+
+	// DeferFirst requires a deferred satisfier before any other call once the
+	// obligation opens: a panic in a call before it would leave the obligation
+	// open.
+	DeferFirst bool `json:"defer-first"`
 }
 
 func (r Rule) compile() (protocol, error) {
@@ -151,12 +183,15 @@ func (r Rule) compile() (protocol, error) {
 		return protocol{}, fmt.Errorf("%q: %w", id, err)
 	}
 	return protocol{
-		id:          id,
-		trigger:     trigger,
-		satisfiers:  satisfiers,
-		openOnError: r.OpenOnError,
-		coverage:    coverage,
-		escapes:     r.Transfer.compile(),
+		id:           id,
+		trigger:      trigger,
+		satisfiers:   satisfiers,
+		openOnError:  r.OpenOnError,
+		coverage:     coverage,
+		escapes:      r.Transfer.compile(),
+		requireDefer: r.RequireDefer,
+		idempotent:   r.Idempotent,
+		deferFirst:   r.DeferFirst,
 	}, nil
 }
 
@@ -169,7 +204,7 @@ func (r Rule) compileSatisfiers() ([]side, error) {
 		if satisfier.Name == "" {
 			return nil, fmt.Errorf("satisfier %d: %w", index, ErrEmptySatisfier)
 		}
-		compiled, err := satisfier.compile()
+		compiled, err := satisfier.compileSatisfier()
 		if err != nil {
 			return nil, fmt.Errorf("satisfier %d: %w", index, err)
 		}

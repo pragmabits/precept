@@ -1,6 +1,10 @@
 package paircheck
 
-import "golang.org/x/tools/go/ssa"
+import (
+	"slices"
+
+	"golang.org/x/tools/go/ssa"
+)
 
 // saturated is the count from which obligations on one value are no longer
 // told apart: two or more. It keeps the search finite through loops.
@@ -23,6 +27,18 @@ const (
 	eventTransfer
 )
 
+// leak is how a path leaves an obligation open, if it does.
+type leak int
+
+const (
+	leakNone leak = iota
+	// leakAtExit reaches a return with the obligation open.
+	leakAtExit
+	// leakBeforeDefer calls something, under defer-first, while no deferred
+	// satisfier covers the obligation: a panic there would leave it open.
+	leakBeforeDefer
+)
+
 // obligation is what a trigger call opens on a value: the variables the value
 // was kept in, and the error the call returned, which the obligation exists
 // only without.
@@ -42,18 +58,20 @@ type search struct {
 }
 
 // state is a point of the search: where it resumes, how many obligations on
-// the value are open, how many deferred satisfiers will run at the exit, and
+// the value are open, how many deferred satisfiers will run at the exit,
 // whether a check the search does not read left it unknown if the trigger
-// failed.
+// failed, and whether another value displaced the trigger's error from the
+// variables it was stored into.
 type state struct {
 	block     *ssa.BasicBlock
 	index     int
 	open      int
 	deferred  int
 	uncertain bool
+	displaced bool
 }
 
-func (s search) leaks() bool {
+func (s search) leaks() leak {
 	start := state{block: s.opened.call.Block(), index: s.opened.index + 1, open: 1}
 	pending := []state{start}
 	visited := make(map[state]bool)
@@ -65,28 +83,70 @@ func (s search) leaks() bool {
 			continue
 		}
 		visited[current] = true
-		next, leaked := s.advance(current)
-		if leaked {
-			return true
+		next, found := s.advance(current)
+		if found != leakNone {
+			return found
 		}
 		pending = append(pending, next...)
 	}
-	return false
+	return leakNone
 }
 
 // advance runs the instructions of a block from where current resumes. It
 // returns the states to continue from, or whether an exit is reached with the
 // obligation open.
-func (s search) advance(current state) ([]state, bool) {
+func (s search) advance(current state) ([]state, leak) {
 	instructions := current.block.Instrs
 	for index := current.index; index < len(instructions); index++ {
-		next, ended, leaked := current.after(s.classify(instructions, index))
+		current = current.stored(s.opened.failure, instructions[index])
+		happened := s.classify(instructions, index)
+		if s.callsBeforeDefer(current, instructions[index], happened) {
+			return nil, leakBeforeDefer
+		}
+		next, ended, leaked := current.after(happened)
+		if ended && leaked {
+			return nil, leakAtExit
+		}
 		if ended {
-			return nil, leaked
+			return nil, leakNone
 		}
 		current = next
 	}
-	return s.successors(current), false
+	return s.successors(current), leakNone
+}
+
+// callsBeforeDefer reports whether instruction is, under defer-first, a call
+// made while no deferred satisfier covers the open obligation. A satisfier, a
+// builtin, a call that does not return and the evaluation of a deferred
+// satisfier's arguments do not count.
+func (s search) callsBeforeDefer(current state, instruction ssa.Instruction, happened event) bool {
+	if !s.binding.protocol.deferFirst || current.uncertain || current.deferred >= current.open {
+		return false
+	}
+	call, ok := instruction.(*ssa.Call)
+	if !ok || happened == eventAbandon || s.discharges(call) {
+		return false
+	}
+	if _, builtin := call.Call.Value.(*ssa.Builtin); builtin {
+		return false
+	}
+	return !s.feedsDeferredSatisfier(call)
+}
+
+// feedsDeferredSatisfier reports whether every use of call's result is a
+// deferred satisfier: the call computes that defer's arguments.
+func (s search) feedsDeferredSatisfier(call *ssa.Call) bool {
+	referrers := call.Referrers()
+	if referrers == nil || len(*referrers) == 0 {
+		return false
+	}
+	for _, referrer := range *referrers {
+		deferred, ok := referrer.(*ssa.Defer)
+		if !ok || !s.discharges(deferred) {
+			return false
+		}
+	}
+	return true
 }
 
 // successors continues into the blocks after current. Past a check of the
@@ -96,7 +156,7 @@ func (s search) successors(current state) []state {
 	block := current.block
 	branch, ok := block.Instrs[len(block.Instrs)-1].(*ssa.If)
 	if ok && s.opened.failure.value != nil {
-		switch s.opened.failure.verdictOf(branch.Cond) {
+		switch s.opened.failure.readAt(current.displaced).verdictOf(branch.Cond) {
 		case verdictFailed:
 			return []state{current.into(block.Succs[1], false)}
 		case verdictSucceeded:
@@ -132,7 +192,24 @@ func (s state) after(happened event) (next state, ended, leaked bool) {
 }
 
 func (s state) into(block *ssa.BasicBlock, uncertain bool) state {
-	return state{block: block, open: s.open, deferred: s.deferred, uncertain: uncertain}
+	return state{
+		block:     block,
+		open:      s.open,
+		deferred:  s.deferred,
+		uncertain: uncertain,
+		displaced: s.displaced,
+	}
+}
+
+// stored is s after instruction, which may store into a variable the trigger's
+// error was stored into: the error again, or another value that displaces it.
+func (s state) stored(failed failure, instruction ssa.Instruction) state {
+	store, ok := instruction.(*ssa.Store)
+	if !ok || !slices.Contains(failed.homes, store.Addr) {
+		return s
+	}
+	s.displaced = store.Val != failed.value
+	return s
 }
 
 func (s search) classify(instructions []ssa.Instruction, index int) event {
@@ -142,6 +219,9 @@ func (s search) classify(instructions []ssa.Instruction, index int) event {
 	case *ssa.Defer:
 		if s.discharges(typed) || s.closureDischarges(typed) {
 			return eventDeferred
+		}
+		if s.handsOver(typed.Common()) {
+			return eventTransfer
 		}
 	case *ssa.Return:
 		if s.returns(typed) {
@@ -159,9 +239,15 @@ func (s search) classify(instructions []ssa.Instruction, index int) event {
 
 func (s search) called(call *ssa.Call) event {
 	if s.discharges(call) {
+		if s.binding.protocol.requireDefer {
+			return eventNone
+		}
 		return eventSatisfier
 	}
 	if s.reopens(call) {
+		if s.binding.protocol.idempotent {
+			return eventNone
+		}
 		return eventTrigger
 	}
 	if s.handsOver(call.Common()) {
