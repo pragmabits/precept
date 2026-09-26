@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"cmp"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -37,7 +38,7 @@ func TestCommandWithoutTests(t *testing.T) {
 	if code != exitFindings {
 		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 	}
-	compareWith(t, findings(t, stdout, ""), outsideTests(t))
+	compareWith(t, findings(t, stdout, ""), expected(t, false, false))
 }
 
 // TestCommandFollowsRunTests reads run.tests of a golangci-lint configuration
@@ -45,12 +46,13 @@ func TestCommandWithoutTests(t *testing.T) {
 func TestCommandFollowsRunTests(t *testing.T) {
 	for _, test := range runTestsValues {
 		t.Run(test.name, func(t *testing.T) {
-			config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.value})
+			run := map[string]any{cmp.Or(test.key, "tests"): test.value}
+			config := golangciConfig(t, settingsOf(t, rules), run)
 			code, stdout, stderr := execute(t, nil, command, "-c", config, "./...")
 			if code != exitFindings {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 			}
-			compareWith(t, findings(t, stdout, ""), analyzedUnder(t, test.analyzed))
+			compareWith(t, findings(t, stdout, ""), expected(t, test.analyzed, false))
 		})
 	}
 	t.Run("unset", func(t *testing.T) {
@@ -66,22 +68,30 @@ func TestCommandFollowsRunTests(t *testing.T) {
 // TestCommandFlagWinsOverRunTests writes --tests on the command line against
 // run.tests, and the flag decides, as it does in golangci-lint.
 func TestCommandFlagWinsOverRunTests(t *testing.T) {
-	tests := []struct {
-		flag     string
-		run      bool
-		analyzed bool
-	}{
-		{flag: "--tests", run: false, analyzed: true},
-		{flag: "--tests=false", run: true, analyzed: false},
-	}
-	for _, test := range tests {
+	for _, test := range flagsOverRunTests {
 		t.Run(test.flag, func(t *testing.T) {
 			config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.run})
 			code, stdout, stderr := execute(t, nil, command, "-c", config, test.flag, "./...")
 			if code != exitFindings {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 			}
-			compareWith(t, findings(t, stdout, ""), analyzedUnder(t, test.analyzed))
+			compareWith(t, findings(t, stdout, ""), expected(t, test.analyzed, false))
+		})
+	}
+}
+
+// TestCommandFollowsBuildTags reads run.build-tags of a golangci-lint
+// configuration as golangci-lint does, and adds --build-tags to it.
+func TestCommandFollowsBuildTags(t *testing.T) {
+	for _, test := range buildTags {
+		t.Run(test.name, func(t *testing.T) {
+			config := golangciConfig(t, settingsOf(t, rules), withBuildTags(test.run))
+			arguments := append([]string{"-c", config}, test.flags...)
+			code, stdout, stderr := execute(t, nil, command, append(arguments, "./...")...)
+			if code != exitFindings {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+			}
+			compareWith(t, findings(t, stdout, ""), expected(t, true, test.tagged))
 		})
 	}
 }

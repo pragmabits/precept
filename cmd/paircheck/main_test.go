@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -71,7 +72,13 @@ func TestHelp(t *testing.T) {
 	if code != exitClean {
 		t.Errorf("exit = %d, want %d", code, exitClean)
 	}
-	for _, flag := range []string{"-c, --config", "--tests", "-v, --version"} {
+	for _, flag := range []string{
+		"-c, --config",
+		"--tests",
+		"--build-tags",
+		"--modules-download-mode",
+		"-v, --version",
+	} {
 		if !strings.Contains(stderr, flag) {
 			t.Errorf("usage = %q, want it to name %s", stderr, flag)
 		}
@@ -174,6 +181,57 @@ func TestAnalyzeNamesThePackageOfAnErrorWithoutPosition(t *testing.T) {
 	}
 }
 
+func TestAnalyzeReportsACycleOutsideTheTestsAsWithoutThem(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "circular"))
+	config := write(t, "rules: []\n")
+	code, _, without := execute("--config", config, "--tests=false", "./...")
+	if code != exitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, without)
+	}
+	code, _, with := execute("--config", config, "./...")
+	if code != exitFailed || with != without {
+		t.Errorf("exit = %d, stderr = %q, want %d and %q", code, with, exitFailed, without)
+	}
+}
+
+func TestAnalyzeReadsKeysInAnyCase(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project"))
+	config := write(t, `Linters:
+  Settings:
+    PairCheck:
+      rules:
+        - id: resource
+          trigger: (*example.com/project/resource.Resource).Open
+          satisfiers: [(*example.com/project/resource.Resource).Close]
+`)
+	code, stdout, stderr := execute("--config", config, "./...")
+	if code != exitFindings {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+	}
+	if !strings.Contains(stdout, leak) {
+		t.Errorf("stdout = %q, want it to contain %q", stdout, leak)
+	}
+}
+
+func TestAnalyzeRefusesKeysThatDifferInCase(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project"))
+	config := write(t, `run:
+  tests: true
+  Tests: false
+linters:
+  settings:
+    paircheck:
+      rules: []
+`)
+	code, _, stderr := execute("--config", config, "./...")
+	if code != exitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
+	}
+	if !strings.Contains(stderr, "differ only in case") {
+		t.Errorf("stderr = %q, want it to say the keys differ only in case", stderr)
+	}
+}
+
 func TestAnalyzeKeepsAMainNamedLikeATestMain(t *testing.T) {
 	rules := `rules:
   - id: file
@@ -190,6 +248,98 @@ func TestAnalyzeKeepsAMainNamedLikeATestMain(t *testing.T) {
 			}
 			if !strings.Contains(stdout, want) {
 				t.Errorf("stdout = %q, want it to contain %q", stdout, want)
+			}
+		})
+	}
+}
+
+func TestAnalyzeFollowsModulesDownloadMode(t *testing.T) {
+	tests := []struct {
+		name   string
+		run    string
+		flags  []string
+		failed bool
+	}{
+		{name: "unwritten", run: "", flags: nil, failed: false},
+		{name: "vendor in the file", run: "vendor", flags: nil, failed: true},
+		{
+			name:   "vendor on the command line",
+			run:    "",
+			flags:  []string{"--modules-download-mode=vendor"},
+			failed: true,
+		},
+		{
+			name:   "the flag wins",
+			run:    "vendor",
+			flags:  []string{"--modules-download-mode", "mod"},
+			failed: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "replaced"))
+			config := write(t, "run:\n  modules-download-mode: \""+test.run+"\"\n"+
+				"linters:\n  settings:\n    paircheck:\n      rules: []\n")
+			arguments := append([]string{"--config", config}, test.flags...)
+			code, _, stderr := execute(append(arguments, "./...")...)
+			vendoring := strings.Contains(stderr, "inconsistent vendoring")
+			if code == exitFailed != test.failed || vendoring != test.failed {
+				t.Errorf("exit = %d, stderr = %q, want a vendoring failure: %t", code, stderr, test.failed)
+			}
+		})
+	}
+}
+
+func TestAnalyzeRefusesModulesDownloadMode(t *testing.T) {
+	tests := []struct {
+		name  string
+		run   string
+		flags []string
+	}{
+		{name: "in the file", run: "download", flags: nil},
+		{name: "on the command line", run: "", flags: []string{"--modules-download-mode=download"}},
+		{name: "a number in the file", run: "1", flags: nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "project"))
+			config := write(t, "run:\n  modules-download-mode: "+cmp.Or(test.run, `""`)+"\n"+
+				"linters:\n  settings:\n    paircheck:\n      rules: []\n")
+			arguments := append([]string{"--config", config}, test.flags...)
+			code, _, stderr := execute(append(arguments, "./...")...)
+			if code != exitFailed || !strings.Contains(stderr, "neither mod, readonly nor vendor") {
+				t.Errorf("exit = %d, stderr = %q, want %d and the mode refused", code, stderr, exitFailed)
+			}
+		})
+	}
+}
+
+func TestValidateFollowsBuildTags(t *testing.T) {
+	tests := []struct {
+		name  string
+		run   string
+		flags []string
+		code  int
+	}{
+		{name: "no tag", run: "[]", flags: nil, code: exitFailed},
+		{name: "in the file", run: "[precept]", flags: nil, code: exitClean},
+		{
+			name:  "on the command line",
+			run:   "[]",
+			flags: []string{"--build-tags", "precept"},
+			code:  exitClean,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "tagged"))
+			config := write(t, "run:\n  build-tags: "+test.run+"\n"+
+				"linters:\n  settings:\n    paircheck:\n      rules:\n"+
+				"        - id: handle\n          trigger: ./handle.Open\n"+
+				"          satisfiers: [(*./handle.Handle).Close]\n")
+			arguments := append([]string{"validate", "--config", config}, test.flags...)
+			if code, _, stderr := execute(arguments...); code != test.code {
+				t.Errorf("exit = %d, want %d; stderr: %s", code, test.code, stderr)
 			}
 		})
 	}

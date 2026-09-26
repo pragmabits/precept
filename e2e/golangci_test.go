@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"cmp"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,12 +72,44 @@ func TestGolangciWithoutSettings(t *testing.T) {
 func TestGolangciFollowsRunTests(t *testing.T) {
 	for _, test := range runTestsValues {
 		t.Run(test.name, func(t *testing.T) {
-			config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.value})
+			run := map[string]any{cmp.Or(test.key, "tests"): test.value}
+			config := golangciConfig(t, settingsOf(t, rules), run)
 			code, stdout, stderr := golangci(t, "run", "-c", config, "./...")
 			if code != golangciIssues {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
 			}
-			compareWith(t, findings(t, stdout, " (paircheck)"), analyzedUnder(t, test.analyzed))
+			compareWith(t, findings(t, stdout, " (paircheck)"), expected(t, test.analyzed, false))
+		})
+	}
+}
+
+// TestGolangciFlagWinsOverRunTests writes --tests on the command line against
+// run.tests, as TestCommandFlagWinsOverRunTests does, with the same outcome.
+func TestGolangciFlagWinsOverRunTests(t *testing.T) {
+	for _, test := range flagsOverRunTests {
+		t.Run(test.flag, func(t *testing.T) {
+			config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.run})
+			code, stdout, stderr := golangci(t, "run", "-c", config, test.flag, "./...")
+			if code != golangciIssues {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
+			}
+			compareWith(t, findings(t, stdout, " (paircheck)"), expected(t, test.analyzed, false))
+		})
+	}
+}
+
+// TestGolangciFollowsBuildTags reads each run.build-tags and --build-tags
+// TestCommandFollowsBuildTags writes, with the same outcome.
+func TestGolangciFollowsBuildTags(t *testing.T) {
+	for _, test := range buildTags {
+		t.Run(test.name, func(t *testing.T) {
+			config := golangciConfig(t, settingsOf(t, rules), withBuildTags(test.run))
+			arguments := append([]string{"run", "-c", config}, test.flags...)
+			code, stdout, stderr := golangci(t, append(arguments, "./...")...)
+			if code != golangciIssues {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
+			}
+			compareWith(t, findings(t, stdout, " (paircheck)"), expected(t, true, test.tagged))
 		})
 	}
 }

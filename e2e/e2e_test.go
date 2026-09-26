@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,10 +29,12 @@ const (
 	testMain = "testdata/testmain.yml"
 )
 
-// runTestsValues is what golangci-lint reads in run.tests, weakly typed, with
-// whether the test files are analyzed under it.
+// runTestsValues is what golangci-lint reads in run.tests, weakly typed and
+// under a key of any case, with whether the test files are analyzed under it.
+// A case with no key writes tests.
 var runTestsValues = []struct {
 	name     string
+	key      string
 	value    any
 	analyzed bool
 }{
@@ -43,16 +46,51 @@ var runTestsValues = []struct {
 	{name: "zero", value: 0, analyzed: false},
 	{name: "one", value: 1, analyzed: true},
 	{name: "null", value: nil, analyzed: true},
+	{name: "beyond int64", value: uint64(math.MaxUint64), analyzed: true},
+	{name: "capitalized key", key: "Tests", value: false, analyzed: false},
 }
 
-// analyzedUnder is the expectations of the project the command and
-// golangci-lint meet when the test files are analyzed, or when they are not.
-func analyzedUnder(t *testing.T, tests bool) []expectation {
-	t.Helper()
-	if tests {
-		return expectations(t)
+// flagsOverRunTests write --tests on the command line against run.tests: the
+// flag decides.
+var flagsOverRunTests = []struct {
+	flag     string
+	run      bool
+	analyzed bool
+}{
+	{flag: "--tests", run: false, analyzed: true},
+	{flag: "--tests=false", run: true, analyzed: false},
+}
+
+// buildTags write run.build-tags, weakly typed as golangci-lint reads it, and
+// --build-tags, which adds to it, with whether the package built only under
+// the precept tag is analyzed.
+var buildTags = []struct {
+	name   string
+	run    any
+	flags  []string
+	tagged bool
+}{
+	{name: "unwritten", run: nil, flags: nil, tagged: false},
+	{name: "list", run: []any{"precept"}, flags: nil, tagged: true},
+	{name: "scalar", run: "precept", flags: nil, tagged: true},
+	{name: "other tag", run: []any{"other"}, flags: nil, tagged: false},
+	{name: "flag", run: nil, flags: []string{"--build-tags", "precept"}, tagged: true},
+	{name: "flag list", run: nil, flags: []string{"--build-tags=other,precept"}, tagged: true},
+	{
+		name:   "flag added to run",
+		run:    []any{"other"},
+		flags:  []string{"--build-tags=precept"},
+		tagged: true,
+	},
+}
+
+// withBuildTags is the run section that writes run.build-tags as value, or
+// nothing when value is nil.
+func withBuildTags(value any) map[string]any {
+	if value == nil {
+		return nil
 	}
-	return outsideTests(t)
+	return map[string]any{"build-tags": value}
 }
 
 // refusal is a configuration the analysis refuses, with the error it gives
@@ -163,10 +201,11 @@ type expectation struct {
 	pattern *regexp.Regexp
 }
 
-// compare checks got against every expectation of the project.
+// compare checks got against the expectations a run with the defaults meets:
+// the test files analyzed, and no build tag.
 func compare(t *testing.T, got []diagnostic) {
 	t.Helper()
-	compareWith(t, got, expectations(t))
+	compareWith(t, got, expected(t, true, false))
 }
 
 // compareWith reports every diagnostic no expectation in pending matches, and
@@ -189,11 +228,15 @@ func compareWith(t *testing.T, got []diagnostic, pending []expectation) {
 	}
 }
 
-// outsideTests is the expectations of the project outside its test files.
-func outsideTests(t *testing.T) []expectation {
+// expected is the expectations of the project a run meets with the test files
+// analyzed or not, and with the precept build tag or without it, which leaves
+// the package tagged out.
+func expected(t *testing.T, tests, tagged bool) []expectation {
 	t.Helper()
 	return slices.DeleteFunc(expectations(t), func(want expectation) bool {
-		return strings.HasSuffix(want.file, "_test.go")
+		test := strings.HasSuffix(want.file, "_test.go")
+		underTag := strings.HasPrefix(want.file, "tagged/")
+		return test && !tests || underTag && !tagged
 	})
 }
 
