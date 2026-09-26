@@ -2,7 +2,9 @@ package e2e_test
 
 import (
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/golangci/plugin-module-register/register"
@@ -31,6 +33,16 @@ func TestPluginReports(t *testing.T) {
 		}
 	}
 	compare(t, got)
+}
+
+// TestPluginSkipsTestMain runs a rule only the generated test main could bind.
+func TestPluginSkipsTestMain(t *testing.T) {
+	graph := analyze(t, pluginAnalyzers(t, testMain))
+	for _, root := range graph.Roots {
+		if root.Err != nil || len(root.Diagnostics) > 0 {
+			t.Errorf("%s: error %v, %d diagnostics, want none", root, root.Err, len(root.Diagnostics))
+		}
+	}
 }
 
 // TestPluginWithoutSettings hands the plugin what golangci-lint hands it when
@@ -85,11 +97,15 @@ func pluginAnalyzersOf(t *testing.T, settings any) []*analysis.Analyzer {
 }
 
 // analyze runs analyzers over every package of the project, loaded with its
-// module as golangci-lint loads it.
+// module and its tests as golangci-lint loads it.
 func analyze(t *testing.T, analyzers []*analysis.Analyzer) *checker.Graph {
 	t.Helper()
 	loaded, err := packages.Load(
-		&packages.Config{Mode: packages.LoadAllSyntax | packages.NeedModule, Dir: project},
+		&packages.Config{
+			Mode:  packages.LoadAllSyntax | packages.NeedModule,
+			Dir:   project,
+			Tests: true,
+		},
 		"./...",
 	)
 	if err != nil {
@@ -98,9 +114,31 @@ func analyze(t *testing.T, analyzers []*analysis.Analyzer) *checker.Graph {
 	if packages.PrintErrors(loaded) > 0 {
 		t.Fatal("the project does not load")
 	}
-	graph, err := checker.Analyze(analyzers, loaded, nil)
+	graph, err := checker.Analyze(analyzers, analyzed(loaded), nil)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
 	return graph
+}
+
+// analyzed is what golangci-lint analyzes of packages loaded with their tests
+// (pkg/lint/package.go): the test variant of a package in place of the
+// package, which it holds, and no generated test main.
+func analyzed(loaded []*packages.Package) []*packages.Package {
+	variant := regexp.MustCompile(`^(.*) \[(.*)\.test\]`)
+	tested := make(map[string]bool)
+	for _, current := range loaded {
+		if match := variant.FindStringSubmatch(current.ID); match != nil {
+			tested[match[1]] = true
+		}
+	}
+	var kept []*packages.Package
+	for _, current := range loaded {
+		testMain := current.Name == "main" && strings.HasSuffix(current.PkgPath, ".test")
+		replaced := !variant.MatchString(current.ID) && tested[current.PkgPath]
+		if !testMain && !replaced {
+			kept = append(kept, current)
+		}
+	}
+	return kept
 }

@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"go.yaml.in/yaml/v3"
 )
 
 // golangciVariable names golangci-lint built with this module's plugins.
@@ -23,7 +21,13 @@ const (
 )
 
 func TestGolangciReports(t *testing.T) {
-	code, stdout, stderr := golangci(t, "run", "-c", golangciConfig(t, settingsOf(t, rules)), "./...")
+	code, stdout, stderr := golangci(
+		t,
+		"run",
+		"-c",
+		golangciConfig(t, settingsOf(t, rules), nil),
+		"./...",
+	)
 	if code != golangciIssues {
 		t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
 	}
@@ -37,7 +41,7 @@ func TestGolangciRefuses(t *testing.T) {
 				t,
 				"run",
 				"-c",
-				golangciConfig(t, settingsOf(t, current.file)),
+				golangciConfig(t, settingsOf(t, current.file), nil),
 				"./...",
 			)
 			// golangci-lint quotes the error inside its log line.
@@ -56,7 +60,33 @@ func TestGolangciRefuses(t *testing.T) {
 }
 
 func TestGolangciWithoutSettings(t *testing.T) {
-	code, stdout, stderr := golangci(t, "run", "-c", golangciConfig(t, nil), "./...")
+	code, stdout, stderr := golangci(t, "run", "-c", golangciConfig(t, nil, nil), "./...")
+	if code != 0 || stdout != "" {
+		t.Errorf("exit = %d, stdout = %q, want 0 and no issue; stderr: %s", code, stdout, stderr)
+	}
+}
+
+// TestGolangciWithoutTests leaves the test files out under run.tests: false,
+// as the command does with the same configuration.
+func TestGolangciWithoutTests(t *testing.T) {
+	config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": false})
+	code, stdout, stderr := golangci(t, "run", "-c", config, "./...")
+	if code != golangciIssues {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
+	}
+	compareWith(t, findings(t, stdout, " (paircheck)"), outsideTests(t))
+}
+
+// TestGolangciSkipsTestMain runs a rule only the generated test main could
+// bind.
+func TestGolangciSkipsTestMain(t *testing.T) {
+	code, stdout, stderr := golangci(
+		t,
+		"run",
+		"-c",
+		golangciConfig(t, settingsOf(t, testMain), nil),
+		"./...",
+	)
 	if code != 0 || stdout != "" {
 		t.Errorf("exit = %d, stdout = %q, want 0 and no issue; stderr: %s", code, stdout, stderr)
 	}
@@ -79,53 +109,4 @@ func golangci(t *testing.T, arguments ...string) (code int, stdout, stderr strin
 	}
 	cache := "GOLANGCI_LINT_CACHE=" + t.TempDir()
 	return execute(t, []string{cache}, binary, arguments...)
-}
-
-// golangciConfig writes a golangci-lint configuration running only paircheck
-// as a module plugin, with settings, or with none when settings is nil. Paths
-// are printed relative to the project, one line per issue, with no cap on the
-// count.
-func golangciConfig(t *testing.T, settings map[string]any) string {
-	t.Helper()
-	plugin := map[string]any{"type": "module"}
-	if settings != nil {
-		plugin["settings"] = settings
-	}
-	config := map[string]any{
-		"version": "2",
-		"run":     map[string]any{"relative-path-mode": "wd"},
-		"linters": map[string]any{
-			"default": "none",
-			"enable":  []string{"paircheck"},
-			"settings": map[string]any{
-				"custom": map[string]any{
-					"paircheck": plugin,
-				},
-			},
-		},
-		"issues": map[string]any{
-			"max-issues-per-linter": 0,
-			"max-same-issues":       0,
-			"uniq-by-line":          false,
-		},
-		"output": map[string]any{
-			"formats": map[string]any{
-				"text": map[string]any{
-					"path":               "stdout",
-					"print-issued-lines": false,
-					"colors":             false,
-				},
-			},
-			"show-stats": false,
-		},
-	}
-	content, err := yaml.Marshal(config)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	written := filepath.Join(t.TempDir(), "golangci.yml")
-	if err := os.WriteFile(written, content, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	return written
 }

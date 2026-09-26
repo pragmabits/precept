@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime/debug"
 	"strings"
 
@@ -36,6 +37,7 @@ var (
 	errNoConfig   = errors.New("-c, --config is required")
 	errNoPatterns = errors.New("no packages to analyze")
 	errNoSettings = errors.New("the golangci-lint configuration has no paircheck settings")
+	errRunTests   = errors.New("run.tests is neither true nor false")
 )
 
 // The exit codes of the analysis drivers in golang.org/x/tools.
@@ -56,6 +58,9 @@ const usage = `usage: paircheck -c file packages...
 
   -c, --config file   the rules: a YAML file, or a .golangci.yml carrying them
                       in its settings, native or as a module plugin
+      --tests         analyze the _test.go files too (default true, or
+                      run.tests of a .golangci.yml); leave them out with
+                      --tests=false
   -v, --version       print the version and exit
 `
 
@@ -73,6 +78,7 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(flags.Output(), usage)
 	}
 	path := flags.StringP("config", "c", "", "the rules")
+	analyzeTests := flags.Bool("tests", true, "analyze the test files too")
 	showVersion := flags.BoolP("version", "v", false, "print the version and exit")
 	err := flags.Parse(arguments)
 	if errors.Is(err, pflag.ErrHelp) {
@@ -93,28 +99,48 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	if validating {
 		positional = positional[1:]
 	}
-	code, err := dispatch(validating, *path, positional, stdout)
+	// --tests written on the command line wins over run.tests of a
+	// golangci-lint configuration, as it does in golangci-lint.
+	var override *bool
+	if flags.Changed("tests") {
+		override = analyzeTests
+	}
+	code, err := dispatch(validating, *path, override, positional, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", linterName, err)
 	}
 	return code
 }
 
-func dispatch(validating bool, path string, patterns []string, stdout io.Writer) (int, error) {
+func dispatch(
+	validating bool,
+	path string,
+	override *bool,
+	patterns []string,
+	stdout io.Writer,
+) (int, error) {
 	if path == "" {
 		return exitFailed, errNoConfig
 	}
-	config, err := readConfig(path)
+	config, tests, err := readConfig(path)
 	if err != nil {
 		return exitFailed, err
 	}
 	if validating {
 		return validate(config)
 	}
-	return analyze(config, patterns, stdout)
+	if override != nil {
+		tests = *override
+	}
+	return analyze(config, patterns, tests, stdout)
 }
 
-func analyze(config paircheck.Config, patterns []string, stdout io.Writer) (int, error) {
+func analyze(
+	config paircheck.Config,
+	patterns []string,
+	tests bool,
+	stdout io.Writer,
+) (int, error) {
 	if len(patterns) == 0 {
 		return exitFailed, errNoPatterns
 	}
@@ -125,10 +151,11 @@ func analyze(config paircheck.Config, patterns []string, stdout io.Writer) (int,
 	// The module of each package is what a name relative to the module is
 	// resolved against.
 	mode := packages.LoadAllSyntax | packages.NeedModule
-	loaded, err := packages.Load(&packages.Config{Mode: mode}, patterns...)
+	loaded, err := packages.Load(&packages.Config{Mode: mode, Tests: tests}, patterns...)
 	if err != nil {
 		return exitFailed, err
 	}
+	loaded = analyzed(loaded)
 	if err := loadErrors(loaded); err != nil {
 		return exitFailed, err
 	}
@@ -217,42 +244,97 @@ func outcome(graph *checker.Graph) int {
 	return exitClean
 }
 
+// loadErrors joins the distinct errors of the packages and of what they
+// import. A file of a package with tests is loaded in the package and in its
+// test variant, with the same errors in both.
 func loadErrors(loaded []*packages.Package) error {
 	var problems []error
+	seen := make(map[string]bool)
 	packages.Visit(loaded, nil, func(current *packages.Package) {
 		for _, problem := range current.Errors {
+			if seen[problem.Error()] {
+				continue
+			}
+			seen[problem.Error()] = true
 			problems = append(problems, problem)
 		}
 	})
 	return errors.Join(problems...)
 }
 
+// analyzed is what golangci-lint analyzes of packages loaded with their tests:
+// the test variant of a package in place of the package, whose files it holds,
+// and no test main that go test generates. A pass over the test main would see
+// what testing imports, and bind rules no package of the project can.
+func analyzed(loaded []*packages.Package) []*packages.Package {
+	variant := regexp.MustCompile(`^(.*) \[(.*)\.test\]`)
+	tested := make(map[string]bool)
+	for _, current := range loaded {
+		if match := variant.FindStringSubmatch(current.ID); match != nil {
+			tested[match[1]] = true
+		}
+	}
+	var kept []*packages.Package
+	for _, current := range loaded {
+		testMain := current.Name == "main" && strings.HasSuffix(current.PkgPath, ".test")
+		replaced := !variant.MatchString(current.ID) && tested[current.PkgPath]
+		if !testMain && !replaced {
+			kept = append(kept, current)
+		}
+	}
+	return kept
+}
+
 // readConfig decodes the file the way the module plugin decodes its settings:
-// through JSON, refusing a key the configuration does not have.
-func readConfig(path string) (paircheck.Config, error) {
+// through JSON, refusing a key the configuration does not have. It also says
+// whether the file asks for the test files to be analyzed.
+func readConfig(path string) (paircheck.Config, bool, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return paircheck.Config{}, err
+		return paircheck.Config{}, false, err
 	}
 	var document map[string]any
 	if err := yaml.Unmarshal(content, &document); err != nil {
-		return paircheck.Config{}, fmt.Errorf("%s: %w", path, err)
+		return paircheck.Config{}, false, fmt.Errorf("%s: %w", path, err)
+	}
+	tests, err := testsOf(document)
+	if err != nil {
+		return paircheck.Config{}, false, fmt.Errorf("%s: %w", path, err)
 	}
 	settings, err := settingsOf(document)
 	if err != nil {
-		return paircheck.Config{}, fmt.Errorf("%s: %w", path, err)
+		return paircheck.Config{}, false, fmt.Errorf("%s: %w", path, err)
 	}
 	encoded, err := json.Marshal(settings)
 	if err != nil {
-		return paircheck.Config{}, fmt.Errorf("%s: %w", path, err)
+		return paircheck.Config{}, false, fmt.Errorf("%s: %w", path, err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	var config paircheck.Config
 	if err := decoder.Decode(&config); err != nil {
-		return paircheck.Config{}, fmt.Errorf("%s: %w", path, err)
+		return paircheck.Config{}, false, fmt.Errorf("%s: %w", path, err)
 	}
-	return config, nil
+	return config, tests, nil
+}
+
+// testsOf is run.tests of a golangci-lint configuration: whether the test
+// files are analyzed. It is true when the configuration does not say, as in
+// golangci-lint, and for the command's own file, which has no run section.
+func testsOf(document map[string]any) (bool, error) {
+	if _, isGolangci := document["linters"].(map[string]any); !isGolangci {
+		return true, nil
+	}
+	section, _ := document["run"].(map[string]any)
+	value, written := section["tests"]
+	if !written {
+		return true, nil
+	}
+	tests, isBool := value.(bool)
+	if !isBool {
+		return false, errRunTests
+	}
+	return tests, nil
 }
 
 // settingsOf finds the rules in a document: the document itself, or the

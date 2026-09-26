@@ -1,0 +1,10 @@
+# A rule over runtime/pprof, which no package of the project imports and the
+# test main that go test generates does, through testing/internal/testdeps. No
+# type links the trigger to the satisfier, so a pass that saw both would fail,
+# and only a pass over the test main sees both: golangci-lint never analyzes
+# it, and neither must the command.
+rules:
+  - id: profile
+    trigger: runtime/pprof.StartCPUProfile
+    satisfiers:
+      - runtime/pprof.StopCPUProfile

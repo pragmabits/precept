@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,9 +22,10 @@ import (
 )
 
 const (
-	project = "testdata/project"
-	rules   = "testdata/rules.yml"
-	empty   = "testdata/empty.yml"
+	project  = "testdata/project"
+	rules    = "testdata/rules.yml"
+	empty    = "testdata/empty.yml"
+	testMain = "testdata/testmain.yml"
 )
 
 // refusal is a configuration the analysis refuses, with the error it gives
@@ -134,11 +136,16 @@ type expectation struct {
 	pattern *regexp.Regexp
 }
 
-// compare reports every diagnostic no expectation matches, and every
-// expectation no diagnostic met. One diagnostic meets one expectation.
+// compare checks got against every expectation of the project.
 func compare(t *testing.T, got []diagnostic) {
 	t.Helper()
-	pending := expectations(t)
+	compareWith(t, got, expectations(t))
+}
+
+// compareWith reports every diagnostic no expectation in pending matches, and
+// every expectation no diagnostic met. One diagnostic meets one expectation.
+func compareWith(t *testing.T, got []diagnostic, pending []expectation) {
+	t.Helper()
 	for _, finding := range got {
 		index := slices.IndexFunc(pending, func(want expectation) bool {
 			return want.file == finding.file && want.line == finding.line &&
@@ -153,6 +160,14 @@ func compare(t *testing.T, got []diagnostic) {
 	for _, want := range pending {
 		t.Errorf("%s:%d: no diagnostic matched %q", want.file, want.line, want.pattern)
 	}
+}
+
+// outsideTests is the expectations of the project outside its test files.
+func outsideTests(t *testing.T) []expectation {
+	t.Helper()
+	return slices.DeleteFunc(expectations(t), func(want expectation) bool {
+		return strings.HasSuffix(want.file, "_test.go")
+	})
 }
 
 // expectations reads the `// want` comments of every file of the project.
@@ -277,4 +292,55 @@ func settingsOf(t *testing.T, path string) map[string]any {
 		t.Fatalf("Unmarshal %s: %v", path, err)
 	}
 	return settings
+}
+
+// golangciConfig writes a golangci-lint configuration running only paircheck
+// as a module plugin, with settings, or with none when settings is nil, and
+// with run added to its run section. Paths are printed relative to the
+// project, one line per issue, with no cap on the count.
+func golangciConfig(t *testing.T, settings, run map[string]any) string {
+	t.Helper()
+	plugin := map[string]any{"type": "module"}
+	if settings != nil {
+		plugin["settings"] = settings
+	}
+	section := map[string]any{"relative-path-mode": "wd"}
+	maps.Copy(section, run)
+	config := map[string]any{
+		"version": "2",
+		"run":     section,
+		"linters": map[string]any{
+			"default": "none",
+			"enable":  []string{"paircheck"},
+			"settings": map[string]any{
+				"custom": map[string]any{
+					"paircheck": plugin,
+				},
+			},
+		},
+		"issues": map[string]any{
+			"max-issues-per-linter": 0,
+			"max-same-issues":       0,
+			"uniq-by-line":          false,
+		},
+		"output": map[string]any{
+			"formats": map[string]any{
+				"text": map[string]any{
+					"path":               "stdout",
+					"print-issued-lines": false,
+					"colors":             false,
+				},
+			},
+			"show-stats": false,
+		},
+	}
+	content, err := yaml.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	written := filepath.Join(t.TempDir(), "golangci.yml")
+	if err := os.WriteFile(written, content, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return written
 }

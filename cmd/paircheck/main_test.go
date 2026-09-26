@@ -71,7 +71,7 @@ func TestHelp(t *testing.T) {
 	if code != exitClean {
 		t.Errorf("exit = %d, want %d", code, exitClean)
 	}
-	for _, flag := range []string{"-c, --config", "-v, --version"} {
+	for _, flag := range []string{"-c, --config", "--tests", "-v, --version"} {
 		if !strings.Contains(stderr, flag) {
 			t.Errorf("usage = %q, want it to name %s", stderr, flag)
 		}
@@ -143,6 +143,36 @@ func TestAnalyzeRefusesUnboundRule(t *testing.T) {
 	want := `rule "swap": more than one slot`
 	if strings.Count(stderr, want) != 1 {
 		t.Errorf("stderr = %q, want %q once", stderr, want)
+	}
+}
+
+func TestAnalyzePrintsLoadErrorsOnce(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "broken"))
+	code, _, stderr := execute("--config", write(t, "rules: []\n"), "./...")
+	if code != exitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
+	}
+	want := `value.go:5:27: cannot use "value"`
+	if strings.Count(stderr, want) != 1 {
+		t.Errorf("stderr = %q, want %q once", stderr, want)
+	}
+}
+
+func TestAnalyzeRefusesRunTests(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project"))
+	config := write(t, `run:
+  tests: sometimes
+linters:
+  settings:
+    paircheck:
+      rules: []
+`)
+	code, _, stderr := execute("--config", config, "./...")
+	if code != exitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
+	}
+	if !strings.Contains(stderr, "run.tests") {
+		t.Errorf("stderr = %q, want it to name run.tests", stderr)
 	}
 }
 
