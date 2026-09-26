@@ -86,8 +86,6 @@ The red run is the only evidence that the case can fail at all.
 
 Checking a finished suite by disabling a check and watching a case fail is
 still worth doing, and it is extra evidence, never a substitute for the red run.
-A `depguard` rule is held to the same order: the planted violation comes before
-the rule is trusted.
 
 **Known blind spot.** Nothing enforces the order. The history shows the test
 and the code landing together, never which ran red first. It is carried by

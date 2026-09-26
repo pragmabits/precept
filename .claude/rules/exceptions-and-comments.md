@@ -47,6 +47,8 @@ set, so an inline directive would pass.
 
 ## The gate
 
-`golangci-lint run ./...` and `go test ./...`. They exit 0 or the work is not
-done. Never report a result you have not run — and a green gate proves what it
-checks and nothing else.
+`make lint` and `make test`, which the CI runs too: `go mod tidy -diff`,
+`golangci-lint config verify`, `golangci-lint run ./...`, the `unused` run
+without tests of `planning.md`, and `go test -race -count=1 ./...`. They exit 0 or the
+work is not done. Never report a result you have not run — and a green gate
+proves what it checks and nothing else.

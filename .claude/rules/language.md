@@ -8,6 +8,9 @@ the commit messages, the documentation, the README, the session reports, the PR
 descriptions, the log lines, the CLI output, a diagnostic and the error that
 refuses a configuration. All of it is English.
 
+The PRDs under `.local/docs/prds/` are the exception, decided by the developer:
+they are written in Portuguese, and stay outside version control.
+
 Portuguese text carries its diacritics. `Navegação`, never `Navegacao`. A missing
 accent is a spelling error, not a shortcut.
 

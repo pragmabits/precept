@@ -148,7 +148,7 @@ A doc comment states what the thing is and the invariant that holds for it.
 
 It does **not** carry the argument that produced the decision, the history of
 another codebase, or what changed and when. Those go where they can be read as a
-whole — [`docs/`](../../docs/), alongside the PRDs. A
+whole — the PRDs, in `.local/docs/prds/`. A
 comment that recounts why a decision was reasonable is not documenting the code,
 it is defending the author, and it is charged to every future reader.
 

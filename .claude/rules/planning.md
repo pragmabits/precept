@@ -6,8 +6,8 @@ allow, and shown before any of it is written. Decided by the developer.
 ## Read first
 
 Before a line of code, and before an answer about the project, read what it
-rests on: the code the step touches and what calls it, `CLAUDE.md`, these
-rules, the PRDs under `docs/prds/`, the latest session reports under
+rests on: the code the step touches and what calls it, these rules, the PRDs
+under `.local/docs/prds/`, the latest session reports under
 `.claude/sessions/`, and whatever else is available.
 
 An answer about the project rests on something concrete in it: a file and a
@@ -28,8 +28,9 @@ the same step. Nothing is built against a dependency that is only planned.
 
 Each step leaves its result usable from outside, through an exported function
 or type that a test outside the package calls. A package whose only exports are
-sentinels, or whose code only its own tests reach, is not a finished step. The
-gate does not see it, because golangci-lint counts a test as use. This does:
+sentinels, or whose code only its own tests reach, is not a finished step.
+`golangci-lint run` counts a test as use, so it does not see it. This run does,
+and it is part of `make lint` and of the CI:
 
 ```
 golangci-lint run --tests=false --enable-only unused ./...
