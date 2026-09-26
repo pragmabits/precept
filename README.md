@@ -226,8 +226,8 @@ From a checkout, `make install` installs the command of every analyzer where
 `go install` puts it: `GOBIN`, or the `bin` of the first `GOPATH` entry.
 
 The exit code is 0 with no diagnostic, 3 with diagnostics, and 1 when the
-configuration fails to load, or the packages do, their test files included, or
-a rule cannot bind (see Validating the rules).
+configuration fails to load, or the packages do, a test file that does not
+compile included, or a rule cannot bind (see Validating the rules).
 
 `-c`, `--config` takes a file with the rules, as above, or a `.golangci.yml`
 carrying them in its settings, native or as a module plugin. Flags follow the
@@ -236,8 +236,8 @@ GNU style: before, between or after the packages, and `--` ends them.
 The `_test.go` files are analyzed too, those of the package and those of its
 external `_test` package, as golangci-lint analyzes them. `--tests=false`
 leaves them out. When `-c` names a `.golangci.yml`, its `run.tests` decides
-where the command line does not: a `--tests` written there wins, as in
-golangci-lint. A boolean flag takes its value after `=`: in `--tests false`,
+where the command line does not, read as golangci-lint reads it: a `--tests`
+written there wins, as in golangci-lint. A boolean flag takes its value after `=`: in `--tests false`,
 `false` is a package.
 
 `-v`, `--version` prints the version the binary was built from, such as `v0.1.0`.
@@ -329,6 +329,9 @@ keeps the test files out of it.
   discharges, and paircheck stays silent.
 - The command does not run as a `go vet -vettool`: it does not speak the
   protocol `go vet` uses with a vet tool.
+- `validate` loads the packages the rules name without their tests, whatever
+  `--tests` or `run.tests` say: a rule naming a function or method declared in
+  a `_test.go` file is refused as unknown, although the analysis applies it.
 - Under `on-success`, an error checked with `errors.Is`, `errors.As` or a
   `switch` is not known to be a failure, and neither is one a wrapper outside
   `failures` returned: a return of it with no satisfier called on the path is

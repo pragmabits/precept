@@ -92,16 +92,20 @@ golangci-lint accepts linters, not detectors.
 - GNU-style flags through pflag; `validate` is the first positional argument.
 - It loads the packages with their tests and analyzes what golangci-lint
   analyzes (`analyzed`): the test variant in place of its package, and no
-  generated test main. `--tests` defaults to `run.tests` when `-c` names a
-  `.golangci.yml`, and a `--tests` written on the command line wins, as in
-  golangci-lint.
+  generated test main. A test main is one a loaded variant is built for, so a
+  main package whose path ends in `.test` is analyzed, where golangci-lint
+  drops it. `--tests` defaults to `run.tests` when `-c` names a
+  `.golangci.yml`, read weakly typed as golangci-lint reads it (`testsOf`),
+  and a `--tests` written on the command line wins, as in golangci-lint.
 - The rules come from the command's own YAML (`rules:` at the top), or from a
   `.golangci.yml`, as native settings (`linters.settings.paircheck`) or as
   plugin settings (`linters.settings.custom.paircheck.settings`).
 - It runs `checker.Analyze` over `packages.Load` and prints each distinct error
   once. Exit codes: 0 clean, 3 with diagnostics, 1 on failure.
 - `validate` resolves relative names against the module of the current
-  directory, read from the `go.mod` that `go env GOMOD` names.
+  directory, read from the `go.mod` that `go env GOMOD` names. It loads
+  without the tests, whatever `--tests` says: a rule on a function declared in
+  a `_test.go` is refused, a limit the README states.
 
 ### `plugin/`
 
@@ -122,13 +126,14 @@ sit at the repository root: golangci-lint-action builds any root
   `e2e/testdata/rules.yml` reports. The same expectations are checked for:
   - the built command;
   - the plugin, run in process with settings shaped as golangci-lint hands
-    them, over the packages golangci-lint analyzes (`analyzed`, the same
-    filter as the command's);
+    them, over the packages golangci-lint analyzes (`analyzed`, a copy of
+    golangci-lint's filter, kept apart from the command's);
   - behind the `golangci` build tag, golangci-lint with the plugin, whose path
     comes from `PRECEPT_GOLANGCI_LINT`.
 
   `e2e/testdata/refused/*.yml` must fail with the error in the test's
-  `refusals` table.
+  `refusals` table. `e2e/testdata/testmain.yml` holds a rule only the
+  generated test main could bind, and must pass silently in all three.
 
 ## Pins that move together
 
