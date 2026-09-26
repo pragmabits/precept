@@ -1,6 +1,6 @@
 # The rules of paircheck in its own format, with every optional key of a rule
-# written at its default. `slot` is left out: its default is the one slot the
-# types allow. The keys are described in the README, under Rules.
+# written at its default. `slot` is left out: by default it is deduced from the
+# types, as the README describes under Rules, where every key is.
 #
 #   paircheck -c paircheck.example.yml ./...
 rules:
@@ -12,6 +12,9 @@ rules:
     open-on-error: false
     deferred-closure: any-path
     transfer: all
+    require-defer: false
+    idempotent: false
+    defer-first: false
 
   - id: file
     trigger: os.Open
@@ -20,6 +23,9 @@ rules:
     open-on-error: false
     deferred-closure: any-path
     transfer: all
+    require-defer: false
+    idempotent: false
+    defer-first: false
 
   - id: lock
     trigger: (*sync.Mutex).Lock
@@ -28,3 +34,6 @@ rules:
     open-on-error: false
     deferred-closure: any-path
     transfer: all
+    require-defer: false
+    idempotent: false
+    defer-first: false
