@@ -90,6 +90,11 @@ golangci-lint accepts linters, not detectors.
 ### `cmd/paircheck/`, the command
 
 - GNU-style flags through pflag; `validate` is the first positional argument.
+- It loads the packages with their tests and analyzes what golangci-lint
+  analyzes (`analyzed`): the test variant in place of its package, and no
+  generated test main. `--tests` defaults to `run.tests` when `-c` names a
+  `.golangci.yml`, and a `--tests` written on the command line wins, as in
+  golangci-lint.
 - The rules come from the command's own YAML (`rules:` at the top), or from a
   `.golangci.yml`, as native settings (`linters.settings.paircheck`) or as
   plugin settings (`linters.settings.custom.paircheck.settings`).
@@ -117,7 +122,8 @@ sit at the repository root: golangci-lint-action builds any root
   `e2e/testdata/rules.yml` reports. The same expectations are checked for:
   - the built command;
   - the plugin, run in process with settings shaped as golangci-lint hands
-    them;
+    them, over the packages golangci-lint analyzes (`analyzed`, the same
+    filter as the command's);
   - behind the `golangci` build tag, golangci-lint with the plugin, whose path
     comes from `PRECEPT_GOLANGCI_LINT`.
 
@@ -151,8 +157,9 @@ test before its tag exists.
 
 ## Gotchas
 
-- Flags are `-c`/`--config` and `-v`/`--version` only: under pflag,
-  `-config rules.yml` parses as `-c onfig`, with `rules.yml` as a package.
+- Flags are `-c`/`--config`, `--tests` and `-v`/`--version` only: under
+  pflag, `-config rules.yml` parses as `-c onfig`, with `rules.yml` as a
+  package, and `--tests false` takes `false` as a package.
 - golangci-lint looks for `.golangci.{yml,yaml,toml,json}` from the directory of
   its first package argument: a configuration anywhere in the tree is named
   otherwise (`golangci.example.yml`).

@@ -226,12 +226,19 @@ From a checkout, `make install` installs the command of every analyzer where
 `go install` puts it: `GOBIN`, or the `bin` of the first `GOPATH` entry.
 
 The exit code is 0 with no diagnostic, 3 with diagnostics, and 1 when the
-configuration or the packages fail to load, or a rule cannot bind (see
-Validating the rules).
+configuration fails to load, or the packages do, their test files included, or
+a rule cannot bind (see Validating the rules).
 
 `-c`, `--config` takes a file with the rules, as above, or a `.golangci.yml`
 carrying them in its settings, native or as a module plugin. Flags follow the
 GNU style: before, between or after the packages, and `--` ends them.
+
+The `_test.go` files are analyzed too, those of the package and those of its
+external `_test` package, as golangci-lint analyzes them. `--tests=false`
+leaves them out. When `-c` names a `.golangci.yml`, its `run.tests` decides
+where the command line does not: a `--tests` written there wins, as in
+golangci-lint. A boolean flag takes its value after `=`: in `--tests false`,
+`false` is a package.
 
 `-v`, `--version` prints the version the binary was built from, such as `v0.1.0`.
 
@@ -289,6 +296,22 @@ linters:
               satisfiers:
                 - (*os.File).Close
 ```
+
+golangci-lint analyzes the test files unless `run.tests` is `false`. An
+exclusion rule drops paircheck's findings in them, for paircheck alone:
+
+```yaml
+linters:
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - paircheck
+```
+
+The exclusion drops findings, not the analysis: a rule that cannot bind in the
+test variant of a package still stops the run, and only `run.tests: false`
+keeps the test files out of it.
 
 ### Limits
 
