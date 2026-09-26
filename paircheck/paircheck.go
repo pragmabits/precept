@@ -37,6 +37,10 @@ func check(pass *analysis.Pass, protocols []protocol) error {
 	if !ok {
 		return errNoProgram
 	}
+	protocols, err := withinModule(protocols, moduleOf(pass))
+	if err != nil {
+		return err
+	}
 	visible := visiblePackages(pass.Pkg)
 	bindings := make([]binding, 0, len(protocols))
 	for _, current := range protocols {
@@ -55,6 +59,15 @@ func check(pass *analysis.Pass, protocols []protocol) error {
 		}
 	}
 	return nil
+}
+
+// moduleOf is the path of the module the analyzed package belongs to, or empty
+// when the driver knows of none.
+func moduleOf(pass *analysis.Pass) string {
+	if pass.Module == nil {
+		return ""
+	}
+	return pass.Module.Path
 }
 
 func checkFunction(

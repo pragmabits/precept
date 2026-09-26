@@ -16,6 +16,9 @@ const (
 	eventNone event = iota
 	eventTrigger
 	eventSatisfier
+	// eventUndeferred is a satisfier called on the path under require-defer,
+	// where only a deferred one discharges.
+	eventUndeferred
 	eventDeferred
 	// eventExit returns from the function, running its deferred calls.
 	eventExit
@@ -37,6 +40,9 @@ const (
 	// leakBeforeDefer calls something, under defer-first, while no deferred
 	// satisfier covers the obligation: a panic there would leave it open.
 	leakBeforeDefer
+	// leakOnSuccess reaches, under on-success, a return that hands back no
+	// failure with no satisfier called on the path.
+	leakOnSuccess
 )
 
 // obligation is what a trigger call opens on a value: the variables the value
@@ -61,14 +67,19 @@ type search struct {
 // the value are open, how many deferred satisfiers will run at the exit,
 // whether a check the search does not read left it unknown if the trigger
 // failed, and whether another value displaced the trigger's error from the
-// variables it was stored into.
+// variables it was stored into. Under on-success it also holds whether a
+// satisfier was called on the path, and the error value and the variable the
+// path knows to hold a failure.
 type state struct {
-	block     *ssa.BasicBlock
-	index     int
-	open      int
-	deferred  int
-	uncertain bool
-	displaced bool
+	block          *ssa.BasicBlock
+	index          int
+	open           int
+	deferred       int
+	uncertain      bool
+	displaced      bool
+	called         bool
+	failedValue    ssa.Value
+	failedVariable ssa.Value
 }
 
 func (s search) leaks() leak {
@@ -99,9 +110,13 @@ func (s search) advance(current state) ([]state, leak) {
 	instructions := current.block.Instrs
 	for index := current.index; index < len(instructions); index++ {
 		current = current.stored(s.opened.failure, instructions[index])
+		current = s.remembered(current, instructions[index])
 		happened := s.classify(instructions, index)
 		if s.callsBeforeDefer(current, instructions[index], happened) {
 			return nil, leakBeforeDefer
+		}
+		if ret, ok := instructions[index].(*ssa.Return); ok && happened == eventExit {
+			return nil, s.leakAt(current, ret)
 		}
 		next, ended, leaked := current.after(happened)
 		if ended && leaked {
@@ -166,25 +181,43 @@ func (s search) successors(current state) []state {
 		}
 	}
 	next := make([]state, 0, len(block.Succs))
-	for _, successor := range block.Succs {
-		next = append(next, current.into(successor, current.uncertain))
+	for position, successor := range block.Succs {
+		following := current.into(successor, current.uncertain)
+		if ok && s.binding.protocol.onSuccess {
+			following = following.along(branch, position)
+		}
+		next = append(next, following)
 	}
 	return next
 }
 
+// leakAt is how the path leaves the obligation open at ret, if it does.
+func (s search) leakAt(current state, ret *ssa.Return) leak {
+	switch {
+	case current.uncertain:
+		return leakNone
+	case current.open > current.deferred:
+		return leakAtExit
+	case s.binding.protocol.onSuccess && !current.called && !s.returnsFailure(current, ret):
+		return leakOnSuccess
+	}
+	return leakNone
+}
+
 // after is the state once happened took place, and whether the path ended
-// there with the obligation open.
+// there with the obligation open. An exit is read by leakAt, before this.
 func (s state) after(happened event) (next state, ended, leaked bool) {
 	switch happened {
 	case eventTrigger:
 		s.open = min(s.open+1, saturated)
 	case eventSatisfier:
 		s.open--
+		s.called = true
 		return s, s.open == 0, false
+	case eventUndeferred:
+		s.called = true
 	case eventDeferred:
 		s.deferred = min(s.deferred+1, saturated)
-	case eventExit:
-		return s, true, !s.uncertain && s.open > s.deferred
 	case eventAbandon, eventTransfer:
 		return s, true, false
 	}
@@ -193,11 +226,14 @@ func (s state) after(happened event) (next state, ended, leaked bool) {
 
 func (s state) into(block *ssa.BasicBlock, uncertain bool) state {
 	return state{
-		block:     block,
-		open:      s.open,
-		deferred:  s.deferred,
-		uncertain: uncertain,
-		displaced: s.displaced,
+		block:          block,
+		open:           s.open,
+		deferred:       s.deferred,
+		uncertain:      uncertain,
+		displaced:      s.displaced,
+		called:         s.called,
+		failedValue:    s.failedValue,
+		failedVariable: s.failedVariable,
 	}
 }
 
@@ -240,7 +276,7 @@ func (s search) classify(instructions []ssa.Instruction, index int) event {
 func (s search) called(call *ssa.Call) event {
 	if s.discharges(call) {
 		if s.binding.protocol.requireDefer {
-			return eventNone
+			return eventUndeferred
 		}
 		return eventSatisfier
 	}

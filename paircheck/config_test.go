@@ -88,6 +88,12 @@ func TestNewRefusesMalformedNames(t *testing.T) {
 		"(*resource.Pool[T).Acquire",
 		"resource.1Open",
 		"example.com/project/generic.Open[T]",
+		".//resource.Open",
+		"./../resource.Open",
+		"./resource/./handle.Open",
+		"...Open",
+		".resource.Open",
+		"(*.resource.Resource).Open",
 	}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
@@ -110,6 +116,11 @@ func TestNewAcceptsEverySpelling(t *testing.T) {
 		"(*example.com/project/pool.Cache[K, V]).Close",
 		"(*gopkg.in/yaml.v3.Decoder).Decode",
 		"gopkg.in/yaml.v3.Unmarshal",
+		"./resource.Open",
+		"(*./internal/resource.Resource).Open",
+		"(./pool.Pool[T]).Acquire",
+		"..Open",
+		"(*..Resource).Open",
 	}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
@@ -237,6 +248,30 @@ func TestIdempotentDecodes(t *testing.T) {
 	}
 }
 
+func TestOnSuccessDecodes(t *testing.T) {
+	const document = `{"id": "transaction", "trigger": "(*database/sql.DB).Begin", "on-success": true}`
+	var decoded paircheck.Rule
+	if err := json.Unmarshal([]byte(document), &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !decoded.OnSuccess {
+		t.Error("OnSuccess = false, want true")
+	}
+}
+
+func TestNewRefusesMalformedFailures(t *testing.T) {
+	for _, name := range []string{"Wrap", "", ".//errs.Wrap"} {
+		t.Run(name, func(t *testing.T) {
+			config := valid()
+			config.Failures = []string{"errors.Join", name}
+			_, err := paircheck.New(config)
+			if !errors.Is(err, paircheck.ErrInvalidName) {
+				t.Errorf("New() error = %v, want %v", err, paircheck.ErrInvalidName)
+			}
+		})
+	}
+}
+
 func TestCallRefusesOtherForms(t *testing.T) {
 	documents := map[string]string{
 		"number":      `{"trigger": 1}`,
@@ -313,13 +348,52 @@ func TestPackagesListsEveryPathOnce(t *testing.T) {
 		rule("transaction", "(*database/sql.DB).Begin", "(*database/sql.Tx).Commit"),
 		rule("file", "os.Open", "(*os.File).Close", "gopkg.in/yaml.v3.Release"),
 	}}
-	got, err := paircheck.Packages(config)
+	got, err := paircheck.Packages(config, "")
 	if err != nil {
 		t.Fatalf("Packages: %v", err)
 	}
 	want := []string{"database/sql", "gopkg.in/yaml.v3", "os"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("Packages() = %v, want %v", got, want)
+	}
+}
+
+func TestPackagesResolvesRelativeNames(t *testing.T) {
+	config := paircheck.Config{Rules: []paircheck.Rule{
+		rule("resource", "(*./resource.Resource).Open", "(*./resource.Resource).Close"),
+		rule("lease", "..Acquire", "..Release", "os.Exit"),
+	}}
+	got, err := paircheck.Packages(config, "example.com/project")
+	if err != nil {
+		t.Fatalf("Packages: %v", err)
+	}
+	want := []string{"example.com/project", "example.com/project/resource", "os"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("Packages() = %v, want %v", got, want)
+	}
+}
+
+func TestPackagesListsFailures(t *testing.T) {
+	config := paircheck.Config{
+		Rules:    []paircheck.Rule{rule("file", "os.Open", "(*os.File).Close")},
+		Failures: []string{"./errs.Wrap", "(*google.golang.org/grpc/status.Status).Err"},
+	}
+	got, err := paircheck.Packages(config, "example.com/project")
+	if err != nil {
+		t.Fatalf("Packages: %v", err)
+	}
+	want := []string{"example.com/project/errs", "google.golang.org/grpc/status", "os"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("Packages() = %v, want %v", got, want)
+	}
+}
+
+func TestPackagesRefusesRelativeNamesOutsideAModule(t *testing.T) {
+	config := paircheck.Config{Rules: []paircheck.Rule{
+		rule("resource", "(*./resource.Resource).Open", "(*./resource.Resource).Close"),
+	}}
+	if _, err := paircheck.Packages(config, ""); !errors.Is(err, paircheck.ErrNoModule) {
+		t.Errorf("Packages() error = %v, want %v", err, paircheck.ErrNoModule)
 	}
 }
 

@@ -108,18 +108,24 @@ func (s syntax) result(call *ast.CallExpr, index int) string {
 	return types.ExprString(targets[index])
 }
 
-// message says what the path left undone: the satisfier before the return, or,
-// under defer-first, the deferred satisfier before any other call.
+// message says what the path left undone: the satisfier before the return;
+// under defer-first, the deferred satisfier before any other call; under
+// on-success, a satisfier called on the path before a return without error.
 func message(violated protocol, expression string, found leak) string {
+	satisfiers := required(violated.satisfiers)
 	deadline := "before function exit"
-	if found == leakBeforeDefer {
+	switch found {
+	case leakBeforeDefer:
 		deadline = "deferred before any other call"
+	case leakOnSuccess:
+		satisfiers += " called"
+		deadline = "before a return without error"
 	}
 	return fmt.Sprintf(
 		"[%s] %s requires %s on %s %s",
 		violated.id,
 		violated.trigger.name.name,
-		required(violated.satisfiers),
+		satisfiers,
 		expression,
 		deadline,
 	)

@@ -115,3 +115,7 @@ func (r *Resource) Stop()        {}
 
 // Quit ends the process, as a helper of another package would.
 func Quit() { os.Exit(3) }
+
+// Wrap adds context to an error that is not nil, as an error helper of a
+// project would.
+func Wrap(err error) error { return err }

@@ -2,6 +2,7 @@ package paircheck_test
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -132,6 +133,27 @@ func TestContext(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), analyzer, "contexts")
 }
 
+func TestRelativeNames(t *testing.T) {
+	analyzer := build(t,
+		rule("resource", "(*./resource.Resource).Open", "(*./resource.Resource).Close"),
+		rule("lease", "..Acquire", "..Release"),
+	)
+	analysistest.Run(t, filepath.Join(analysistest.TestData(), "module"), analyzer, "./...")
+}
+
+func TestRelativeNameOutsideAModuleFails(t *testing.T) {
+	var reported recorder
+	analyzer := build(
+		t,
+		rule("resource", "(*./resource.Resource).Open", "(*./resource.Resource).Close"),
+	)
+	analysistest.Run(&reported, analysistest.TestData(), analyzer, "ambiguous")
+	want := `rule "resource": (./resource.Resource).Open: ` + paircheck.ErrNoModule.Error()
+	if len(reported.errors) != 1 || !strings.HasSuffix(reported.errors[0], want) {
+		t.Errorf("errors = %q, want one ending in %q", reported.errors, want)
+	}
+}
+
 func TestInvisibleSatisfier(t *testing.T) {
 	analyzer := build(t,
 		rule("finish", "resource.Dial", "other.Finish"),
@@ -200,6 +222,25 @@ func TestRequireDefer(t *testing.T) {
 	lock := rule("lock", "(*sync.Mutex).Lock", "(*sync.Mutex).Unlock")
 	lock.RequireDefer = true
 	analysistest.Run(t, analysistest.TestData(), build(t, transaction, lock), "requiredefer")
+}
+
+func TestOnSuccess(t *testing.T) {
+	transaction := rule(
+		"transaction",
+		"(*resource.DB).Begin",
+		"(*resource.Tx).Commit",
+		"(*resource.Tx).Rollback",
+	)
+	transaction.RequireDefer = true
+	transaction.OnSuccess = true
+	analyzer, err := paircheck.New(paircheck.Config{
+		Rules:    []paircheck.Rule{transaction},
+		Failures: []string{"resource.Wrap"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	analysistest.Run(t, analysistest.TestData(), analyzer, "onsuccess")
 }
 
 func TestFunctionValue(t *testing.T) {

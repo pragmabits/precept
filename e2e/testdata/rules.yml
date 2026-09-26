@@ -1,6 +1,10 @@
 # Every rule the project under testdata/project is checked against. The first
 # three are the README's own; the project's `// want` comments say what each
-# rule reports.
+# rule reports. The project's own packages are named relative to its module,
+# but in pool, written in full, and in pool-strict, which mixes both.
+failures:
+  - ./ledger.Wrap
+
 rules:
   - id: transaction
     trigger: (*database/sql.DB).Begin
@@ -33,27 +37,27 @@ rules:
     transfer: {return: true, store: false, argument: false}
 
   - id: pool-strict
-    trigger: (*example.com/project/txn.Pool).Begin
+    trigger: (*./txn.Pool).Begin
     satisfiers:
       - (example.com/project/txn.Tx).Commit
-      - (example.com/project/txn.Tx).Rollback
+      - (./txn.Tx).Rollback
     transfer: {return: true, store: false, argument: false}
     require-defer: true
 
   - id: conn
-    trigger: (*example.com/project/txn.Conn).Begin
+    trigger: (*./txn.Conn).Begin
     satisfiers:
-      - (example.com/project/txn.Tx).Commit
-      - (example.com/project/txn.Tx).Rollback
+      - (./txn.Tx).Commit
+      - (./txn.Tx).Rollback
     transfer: {return: true, store: false, argument: false}
 
   - id: savepoint
     trigger:
-      name: (example.com/project/txn.Tx).Begin
+      name: (./txn.Tx).Begin
       slot: result 0
     satisfiers:
-      - (example.com/project/txn.Tx).Commit
-      - (example.com/project/txn.Tx).Rollback
+      - (./txn.Tx).Commit
+      - (./txn.Tx).Rollback
     transfer: {return: true, store: false, argument: false}
 
   - id: read
@@ -68,129 +72,129 @@ rules:
     require-defer: true
 
   - id: lease
-    trigger: example.com/project/lease.Acquire
+    trigger: ./lease.Acquire
     satisfiers:
-      - (*example.com/project/lease.Lease).Release
+      - (*./lease.Lease).Release
     open-on-error: true
 
   - id: lease-strict
-    trigger: example.com/project/lease.Acquire
+    trigger: ./lease.Acquire
     satisfiers:
-      - (*example.com/project/lease.Lease).Release
+      - (*./lease.Lease).Release
     open-on-error: true
     require-defer: true
 
   - id: batch-any
-    trigger: example.com/project/batch.Start
+    trigger: ./batch.Start
     satisfiers:
-      - (*example.com/project/batch.Job).Finish
-      - (*example.com/project/batch.Job).Cancel
+      - (*./batch.Job).Finish
+      - (*./batch.Job).Cancel
     deferred-closure: any-path
 
   - id: batch-every
-    trigger: example.com/project/batch.Start
+    trigger: ./batch.Start
     satisfiers:
-      - (*example.com/project/batch.Job).Finish
-      - (*example.com/project/batch.Job).Cancel
+      - (*./batch.Job).Finish
+      - (*./batch.Job).Cancel
     deferred-closure: every-path
 
   - id: batch-none
-    trigger: example.com/project/batch.Start
+    trigger: ./batch.Start
     satisfiers:
-      - (*example.com/project/batch.Job).Finish
-      - (*example.com/project/batch.Job).Cancel
+      - (*./batch.Job).Finish
+      - (*./batch.Job).Cancel
     deferred-closure: none
 
   - id: batch-strict-every
-    trigger: example.com/project/batch.Start
+    trigger: ./batch.Start
     satisfiers:
-      - (*example.com/project/batch.Job).Finish
-      - (*example.com/project/batch.Job).Cancel
+      - (*./batch.Job).Finish
+      - (*./batch.Job).Cancel
     deferred-closure: every-path
     require-defer: true
 
   - id: batch-strict-none
-    trigger: example.com/project/batch.Start
+    trigger: ./batch.Start
     satisfiers:
-      - (*example.com/project/batch.Job).Finish
-      - (*example.com/project/batch.Job).Cancel
+      - (*./batch.Job).Finish
+      - (*./batch.Job).Cancel
     deferred-closure: none
     require-defer: true
 
   - id: fd
     trigger:
-      name: example.com/project/fdio.Open
+      name: ./fdio.Open
       slot: result 0
     satisfiers:
-      - example.com/project/fdio.Close
+      - ./fdio.Close
     transfer: {return: true, store: false, argument: false}
 
   - id: pin
-    trigger: example.com/project/pin.Pin
+    trigger: ./pin.Pin
     satisfiers:
-      - example.com/project/pin.Unpin
+      - ./pin.Unpin
 
   - id: scope
     trigger:
-      name: example.com/project/scope.Enter
+      name: ./scope.Enter
       slot: result 0
     satisfiers:
-      - name: example.com/project/scope.Leave
+      - name: ./scope.Leave
         slot: argument 0
 
   - id: handle
-    trigger: example.com/project/generic.Open
+    trigger: ./generic.Open
     satisfiers:
-      - example.com/project/generic.Close
+      - ./generic.Close
 
   - id: box
-    trigger: example.com/project/generic.NewBox
+    trigger: ./generic.NewBox
     satisfiers:
-      - (*example.com/project/generic.Box).Close
+      - (*./generic.Box).Close
 
   - id: cache
-    trigger: example.com/project/generic.NewCache
+    trigger: ./generic.NewCache
     satisfiers:
-      - (*example.com/project/generic.Cache[K, V]).Close
+      - (*./generic.Cache[K, V]).Close
 
   - id: hold
     trigger:
-      name: example.com/project/generic.Hold
+      name: ./generic.Hold
       slot: argument 0
     satisfiers:
-      - name: example.com/project/generic.Free
+      - name: ./generic.Free
         slot: argument 0
 
   - id: pair
-    trigger: example.com/project/pair.Both
+    trigger: ./pair.Both
     satisfiers:
-      - example.com/project/release.Left
+      - ./release.Left
 
   - id: all
     trigger:
-      name: example.com/project/generic.HoldAll
+      name: ./generic.HoldAll
       slot: argument 0
     satisfiers:
-      - name: example.com/project/generic.FreeAll
+      - name: ./generic.FreeAll
         slot: argument 0
 
   - id: entries
     trigger:
-      name: example.com/project/generic.Lock
+      name: ./generic.Lock
       slot: argument 0
     satisfiers:
-      - name: example.com/project/generic.Unlock
+      - name: ./generic.Unlock
         slot: argument 0
 
   - id: serve
-    trigger: (*example.com/project/server.Server).Serve
+    trigger: (*./server.Server).Serve
     satisfiers:
-      - (*example.com/project/server.Server).Shutdown
+      - (*./server.Server).Shutdown
 
   - id: serve-idempotent
-    trigger: (*example.com/project/server.Server).Serve
+    trigger: (*./server.Server).Serve
     satisfiers:
-      - (*example.com/project/server.Server).Shutdown
+      - (*./server.Server).Shutdown
     idempotent: true
 
   - id: write-first
@@ -200,6 +204,16 @@ rules:
     defer-first: true
 
   - id: permit
-    trigger: (*example.com/project/sem.Semaphore).Acquire
+    trigger: (*./sem.Semaphore).Acquire
     satisfiers:
       - call
+
+  - id: ledger
+    trigger: (./ledger.Provider).New
+    satisfiers:
+      - (./ledger.Transaction).Commit
+      - (./ledger.Transaction).Rollback
+    transfer: none
+    require-defer: true
+    defer-first: true
+    on-success: true

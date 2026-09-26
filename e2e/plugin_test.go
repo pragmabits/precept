@@ -84,11 +84,12 @@ func pluginAnalyzersOf(t *testing.T, settings any) []*analysis.Analyzer {
 	return analyzers
 }
 
-// analyze runs analyzers over every package of the project.
+// analyze runs analyzers over every package of the project, loaded with its
+// module as golangci-lint loads it.
 func analyze(t *testing.T, analyzers []*analysis.Analyzer) *checker.Graph {
 	t.Helper()
 	loaded, err := packages.Load(
-		&packages.Config{Mode: packages.LoadAllSyntax, Dir: project},
+		&packages.Config{Mode: packages.LoadAllSyntax | packages.NeedModule, Dir: project},
 		"./...",
 	)
 	if err != nil {

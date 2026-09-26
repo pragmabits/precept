@@ -18,10 +18,13 @@ import (
 	"go/types"
 	"io"
 	"os"
+	"os/exec"
 	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/pflag"
 	"go.yaml.in/yaml/v3"
+	"golang.org/x/mod/modfile"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/checker"
 	"golang.org/x/tools/go/packages"
@@ -119,7 +122,10 @@ func analyze(config paircheck.Config, patterns []string, stdout io.Writer) (int,
 	if err != nil {
 		return exitFailed, err
 	}
-	loaded, err := packages.Load(&packages.Config{Mode: packages.LoadAllSyntax}, patterns...)
+	// The module of each package is what a name relative to the module is
+	// resolved against.
+	mode := packages.LoadAllSyntax | packages.NeedModule
+	loaded, err := packages.Load(&packages.Config{Mode: mode}, patterns...)
 	if err != nil {
 		return exitFailed, err
 	}
@@ -140,9 +146,14 @@ func analyze(config paircheck.Config, patterns []string, stdout io.Writer) (int,
 }
 
 // validate loads the packages the rules name, once, and checks the rules
-// against them.
+// against them. A name relative to the module is resolved against the module
+// of the current directory.
 func validate(config paircheck.Config) (int, error) {
-	paths, err := paircheck.Packages(config)
+	module, err := currentModule()
+	if err != nil {
+		return exitFailed, err
+	}
+	paths, err := paircheck.Packages(config, module)
 	if err != nil {
 		return exitFailed, err
 	}
@@ -157,10 +168,28 @@ func validate(config paircheck.Config) (int, error) {
 			found = append(found, current.Types)
 		}
 	}
-	if err := paircheck.Validate(config, found); err != nil {
+	if err := paircheck.Validate(config, module, found); err != nil {
 		return exitFailed, err
 	}
 	return exitClean, nil
+}
+
+// currentModule is the path of the module the current directory belongs to,
+// as the go command finds its go.mod, or empty outside a module.
+func currentModule() (string, error) {
+	output, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		return "", fmt.Errorf("go env GOMOD: %w", err)
+	}
+	file := strings.TrimSpace(string(output))
+	if file == "" || file == os.DevNull {
+		return "", nil
+	}
+	content, err := os.ReadFile(file)
+	if err != nil {
+		return "", err
+	}
+	return modfile.ModulePath(content), nil
 }
 
 // rootErrors joins the distinct errors of the analyzed packages. A rule the

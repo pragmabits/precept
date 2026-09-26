@@ -160,6 +160,11 @@ type Rule struct {
 	// obligation opens: a panic in a call before it would leave the obligation
 	// open.
 	DeferFirst bool `json:"defer-first"`
+
+	// OnSuccess requires, on every return that does not hand back a failure, a
+	// satisfier called on the path: a deferred one alone does not say how the
+	// obligation ends when the function succeeds.
+	OnSuccess bool `json:"on-success"`
 }
 
 func (r Rule) compile() (protocol, error) {
@@ -192,6 +197,7 @@ func (r Rule) compile() (protocol, error) {
 		requireDefer: r.RequireDefer,
 		idempotent:   r.Idempotent,
 		deferFirst:   r.DeferFirst,
+		onSuccess:    r.OnSuccess,
 	}, nil
 }
 
@@ -216,9 +222,20 @@ func (r Rule) compileSatisfiers() ([]side, error) {
 // Config is the set of rules the analyzer enforces.
 type Config struct {
 	Rules []Rule `json:"rules"`
+
+	// Failures names the functions and methods whose call returns a non-nil
+	// error, besides errors.New and fmt.Errorf: a return that hands back what
+	// one of them returned is a failure to a rule that is on-success.
+	Failures []string `json:"failures"`
 }
 
+// compile validates every rule into a protocol. A protocol that is on-success
+// carries the failures it reads a return by.
 func (c Config) compile() ([]protocol, error) {
+	failures, err := c.compileFailures()
+	if err != nil {
+		return nil, err
+	}
 	protocols := make([]protocol, 0, len(c.Rules))
 	taken := make(map[string]bool, len(c.Rules))
 	for index, rule := range c.Rules {
@@ -230,9 +247,24 @@ func (c Config) compile() ([]protocol, error) {
 			return nil, fmt.Errorf("rule %d: %w: %q", index, ErrDuplicateID, compiled.id)
 		}
 		taken[compiled.id] = true
+		if compiled.onSuccess {
+			compiled.failures = failures
+		}
 		protocols = append(protocols, compiled)
 	}
 	return protocols, nil
+}
+
+func (c Config) compileFailures() ([]qualifiedName, error) {
+	failures := make([]qualifiedName, 0, len(c.Failures))
+	for index, text := range c.Failures {
+		name, err := parseName(text)
+		if err != nil {
+			return nil, fmt.Errorf("failure %d: %w", index, err)
+		}
+		failures = append(failures, name)
+	}
+	return failures, nil
 }
 
 // decodeTextOrObject decodes a JSON string through text and an object into

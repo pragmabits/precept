@@ -168,6 +168,86 @@ func TestValidateAccepts(t *testing.T) {
 	}
 }
 
+const relative = `rules:
+  - id: resource
+    trigger: (*./resource.Resource).Open
+    satisfiers: [(*./resource.Resource).Close]
+`
+
+func TestAnalyzeResolvesRelativeNames(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project"))
+	code, stdout, stderr := execute("--config", write(t, relative), "./...")
+	if code != exitFindings {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+	}
+	if !strings.Contains(stdout, leak) {
+		t.Errorf("stdout = %q, want it to contain %q", stdout, leak)
+	}
+}
+
+func TestValidateResolvesRelativeNames(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project", "leak"))
+	code, _, stderr := execute("validate", "--config", write(t, relative))
+	if code != exitClean {
+		t.Errorf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
+	}
+}
+
+func TestValidateRefusesRelativeNamesOutsideAModule(t *testing.T) {
+	t.Chdir(t.TempDir())
+	code, _, stderr := execute("validate", "--config", write(t, relative))
+	if code != exitFailed {
+		t.Fatalf("exit = %d, want %d", code, exitFailed)
+	}
+	if !strings.Contains(stderr, "relative to the module") {
+		t.Errorf("stderr = %q, want it to say the name is relative to the module", stderr)
+	}
+}
+
+func TestValidateAcceptsFailures(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project"))
+	code, _, stderr := execute(
+		"validate",
+		"--config",
+		write(t, relative+"failures: [./resource.Wrap]\n"),
+	)
+	if code != exitClean {
+		t.Errorf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
+	}
+}
+
+func TestValidateRefusesFailures(t *testing.T) {
+	tests := []struct {
+		defect  string
+		failure string
+		want    string
+	}{
+		{
+			defect:  "misspelled function",
+			failure: "./resource.Wrpa",
+			want:    "failures: example.com/project/resource.Wrpa: no such function or method",
+		},
+		{
+			defect:  "no error returned",
+			failure: "(*./resource.Resource).Open",
+			want:    "failures: (example.com/project/resource.Resource).Open: a failure does not return",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.defect, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "project"))
+			config := write(t, relative+"failures: ["+test.failure+"]\n")
+			code, _, stderr := execute("validate", "--config", config)
+			if code != exitFailed {
+				t.Fatalf("exit = %d, want %d", code, exitFailed)
+			}
+			if !strings.Contains(stderr, test.want) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr, test.want)
+			}
+		})
+	}
+}
+
 func TestValidateRefuses(t *testing.T) {
 	tests := []struct {
 		defect string
