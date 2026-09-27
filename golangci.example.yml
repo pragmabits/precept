@@ -1,16 +1,32 @@
-# paircheck in a golangci-lint configuration, with every optional key of a rule
-# written at its default, and `failures` at its own. `slot` is left out: by
-# default it is deduced from the types, as the README describes under Rules,
-# where every key is.
+# paircheck and defcheck in a golangci-lint configuration, with the keys of
+# defcheck.example.yml and paircheck.example.yml: for paircheck, every optional
+# key of a rule written at its default, and `failures` at its own. `slot` is
+# left out: by default it is deduced from the types, as the README describes
+# under Rules, where every key is.
 #
 #   golangci-lint-precept run -c golangci.example.yml ./...
 #   paircheck -c golangci.example.yml ./...
+#   defcheck -c golangci.example.yml ./...
 version: "2"
 linters:
   enable:
     - paircheck
+    - defcheck
   settings:
     custom:
+      defcheck:
+        type: module
+        description: Reports a declaration whose name a configured pattern forbids.
+        settings:
+          rules:
+            - pattern: '^cfg$'
+              kinds: [local-var, parameter, field]
+              message: avoid the cfg abbreviation
+
+            - pattern: '(?i)manager$'
+              kinds: [package-var, field, function, method]
+              message: ''
+
       paircheck:
         type: module
         description: Reports an obligation not discharged on every path.

@@ -34,7 +34,7 @@ jobs:
           go-version-file: ${{ matrix.go-version-file }}
           go-version: ${{ matrix.go-version }}
       # setup-go restores the build cache, test results included, and e2e/
-      # builds cmd/paircheck, which the cache cannot see: the tests always run.
+      # builds the commands, which the cache cannot see: the tests always run.
       - run: go test -race -count=1 ./...
 
   lint:

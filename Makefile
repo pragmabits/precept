@@ -35,7 +35,7 @@ golangci: ## Build golangci-lint with the plugins, as golangci-lint-precept in G
 	fi
 	cd plugin && $(GOLANGCI_LINT) custom --destination $(bin)
 
-# e2e/ builds cmd/paircheck, which it does not import, and the test cache
+# e2e/ builds the commands, which it does not import, and the test cache
 # cannot see that code change: the tests always run.
 test: ## Run the tests, with the race detector, as the CI does.
 	go test -race -count=1 ./...

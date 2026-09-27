@@ -232,8 +232,10 @@ errors of the packages come first, and those of their tests only once the
 packages load.
 
 `-c`, `--config` takes a file with the rules, as above, or a `.golangci.yml`
-carrying them in its settings, native or as a module plugin. Flags follow the
-GNU style: before, between or after the packages, and `--` ends them.
+carrying them in its settings, native or as a module plugin. A `.golangci.yml`
+carrying both is refused: golangci-lint applies the module plugin's, and the
+file does not say which the command should. Flags follow the GNU style:
+before, between or after the packages, and `--` ends them.
 
 The `_test.go` files are analyzed too, those of the package and those of its
 external `_test` package, as golangci-lint analyzes them. `--tests=false`
@@ -250,11 +252,28 @@ its `run.modules-download-mode`. The load passes both to go, as `-tags` and
 `--tests` or `--modules-download-mode`, leaves the file's key unread, as
 golangci-lint does.
 
-From a `.golangci.yml` the command reads only the paircheck settings and
-those three keys of `run`: `tests`, `build-tags` and `modules-download-mode`.
-Their keys may be written in any case, as golangci-lint reads them, and two
-keys that differ only in case are refused. It does not follow
-`linters.exclusions` or any other key of golangci-lint's.
+A finding in a generated file is dropped, as golangci-lint drops it by
+default: a file with a `// Code generated … DO NOT EDIT.` comment before its
+`package` clause. The `linters.exclusions.generated` of a `.golangci.yml`
+says which files: `strict`, the default, `lax`, which also drops a file whose
+comments before or right after the `package` clause say it is generated, or
+`disable`, which drops none. As in golangci-lint, any other text reads as
+`lax`. Whatever the mode, a finding is printed, and read as generated or not,
+where golangci-lint places it. After a `//line` directive, which a generator
+writes to say where the code below it came from, that is where the directive
+points when it is a Go file, and otherwise where the code is: after
+`//line view.tmpl:5`, in `view.go`. In a file that imports `C`, it is that
+file, not the one cgo rewrites in the build cache, and a finding outside a Go
+file, such as in a file cgo generates, is never printed. When a directive
+points to a file that cannot be read, the command warns, as golangci-lint
+does, and drops no finding in a generated file.
+
+From a `.golangci.yml` the command reads only the paircheck settings, those
+three keys of `run`, `tests`, `build-tags` and `modules-download-mode`, and
+`linters.exclusions.generated`. Their keys may be written in any case, as
+golangci-lint reads them, and two keys that differ only in case are refused.
+It does not follow the rest of `linters.exclusions`, `//nolint`, or any other
+key of golangci-lint's.
 
 `-v`, `--version` prints the version the binary was built from, such as `v0.1.0`.
 
@@ -361,6 +380,11 @@ keeps the test files out of it.
 - A test whose signature `go test` refuses, such as
   `func TestX(b *testing.B)`, is not a load error: the file compiles, and the
   command runs on, as golangci-lint does. `go vet` reports it.
+- A `//line` directive over the `package` clause of a Go file, pointing to
+  another Go file of the packages analyzed, makes golangci-lint print the
+  findings of that other file in this one, at positions that are not theirs,
+  and read them as this file's when it drops generated files. The command
+  leaves each finding in its own file.
 - `validate` loads the packages the rules name without their tests, whatever
   `--tests` or `run.tests` say: a rule naming a function or method declared in
   a `_test.go` file is refused as unknown, although the analysis applies it.
@@ -370,6 +394,158 @@ keeps the test files out of it.
   reported. A package-level error variable left nil is read as a failure.
 - Under `on-success`, a satisfier inside a deferred closure is not a call on
   the path: `defer func() { … err = tx.Commit(ctx) }()` is reported.
+
+## defcheck
+
+defcheck reports a declaration whose name a pattern you configure forbids, in
+the kinds of declaration you choose. It reads a name where it is declared: a
+use of it, an assignment to it, and a name another package declares are never
+reported.
+
+```go
+type Server struct {
+	cfg settings.Config // reported: a field
+}
+
+func Start(path string) (*Server, error) {
+	cfg, err := settings.Load(path) // reported: a local variable
+	if err != nil {
+		return nil, err
+	}
+	if err := settings.Check(cfg); err != nil {
+		cfg, err = settings.Load(cfg.Path + ".default") // an assignment
+	}
+	return &Server{cfg: cfg}, err
+}
+```
+
+```
+server.go:6:2: declaration name "cfg" is forbidden: avoid the cfg abbreviation
+server.go:10:2: declaration name "cfg" is forbidden: avoid the cfg abbreviation
+```
+
+### Rules
+
+```yaml
+rules:
+  - pattern: '^cfg$'
+    kinds: [local-var, parameter, field]
+    message: avoid the cfg abbreviation
+
+  - pattern: '(?i)manager$'
+    kinds: [package-var, field, function, method]
+```
+
+A pattern is a regular expression of the standard library's
+[`regexp`](https://pkg.go.dev/regexp), matched anywhere in the name: `cfg`
+forbids every name that holds it, `^cfg$` the name alone, and `(?i)^cfg$` the
+name in any case.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `pattern` | required | The names the rule forbids. |
+| `kinds` | every kind | The kinds of declaration the rule applies to. |
+| `message` | none | Said in the diagnostic in place of the pattern and the kind. The name is always said. |
+
+A kind is what [`go/types`](https://pkg.go.dev/go/types) makes of the object
+a declaration defines:
+
+| Kind | Declared by | `go/types` |
+| --- | --- | --- |
+| `function` | `func F()` | `*types.Func` without a receiver |
+| `method` | `func (t T) M()`, and a method of an interface | `*types.Func` with a receiver |
+| `package-var` | `var` at the package level | `*types.Var`, `PackageVar` |
+| `local-var` | `var`, `:=`, `range` and a type switch inside a function | `*types.Var`, `LocalVar` |
+| `constant` | `const` | `*types.Const` |
+| `field` | a field with a name of its own | `*types.Var`, `FieldVar` |
+| `parameter` | a parameter of a function, a method, a function literal or type, or a method of an interface | `*types.Var`, `ParamVar` |
+| `receiver` | the receiver of a method | `*types.Var`, `RecvVar` |
+| `result` | a named result | `*types.Var`, `ResultVar` |
+| `type` | `type T …`, and an alias, `type T = U` | `*types.TypeName` |
+| `type-parameter` | `T` in `[T any]`, of a function, a type or the receiver of a method | `*types.TypeName` of a `*types.TypeParam` |
+
+The diagnostic names the pattern and the kind, or says the rule's message:
+
+```
+declaration name "cfg" is forbidden by pattern "^cfg$" for local-var
+declaration name "cfg" is forbidden: avoid the cfg abbreviation
+```
+
+A declaration is reported once for each rule that forbids it, in the order
+the rules are written. A configuration is refused before any package is
+analyzed when a pattern is empty or does not compile, when a kind is not one of
+the table, and when a rule has the pattern, the kinds and the message of
+another: the kinds are compared as a set, so their order, a kind written twice
+and `kinds` left out, which is every kind, do not tell two rules apart.
+
+`defcheck.example.yml` and `golangci.example.yml`, at the root of this
+repository, carry these rules with every key written: in the command's own
+format and as golangci-lint settings.
+
+### What it checks
+
+- Every name the package declares: each identifier
+  [`types.Info.Defs`](https://pkg.go.dev/go/types#Info) gives an object, and
+  the variable of a type switch, `switch v := x.(type)`, once for the switch.
+- In `x, err := f()` after `x` is declared, only `err` is a declaration. A
+  variable declared again in an inner scope is a declaration of its own, and
+  so is each method's type parameter: in `func (l *List[E]) Push(v E)`, `E` is
+  declared by `Push`.
+- `_` declares nothing, and neither does a field embedded without a name of
+  its own: `*http.Client` in a struct is not a field named `Client`.
+- A renamed import, `import cfg "example.com/config"`, and a label are not
+  kinds of declaration. revive's `import-alias-naming`, with its `denyRegex`,
+  forbids patterns in import names.
+
+### Running it
+
+```sh
+go install github.com/pragmabits/precept/cmd/defcheck@latest
+
+defcheck --config rules.yml ./...
+```
+
+The command reads its rules, loads the packages and prints its findings as
+paircheck's does (see Running it, under paircheck): the same flags, the same
+exit codes, the test files analyzed unless `--tests=false`, generated files
+dropped as `linters.exclusions.generated` says, and, from a `.golangci.yml`,
+the defcheck settings, native or as a module plugin. It has no `validate`
+mode: every rule is checked before any package loads, and a rule names nothing
+a package declares.
+
+### golangci-lint
+
+defcheck is in the module plugin paircheck is in: the `.custom-gcl.yml` above
+builds both, and `.golangci.yml` enables and configures each.
+
+```yaml
+version: "2"
+linters:
+  enable:
+    - defcheck
+  settings:
+    custom:
+      defcheck:
+        type: module
+        description: Reports a declaration whose name a configured pattern forbids.
+        settings:
+          rules:
+            - pattern: '^cfg$'
+              kinds: [local-var, parameter, field]
+              message: avoid the cfg abbreviation
+```
+
+### Limits
+
+- A name the language, the toolchain or an interface imposes is reported like
+  any other the pattern matches: `init`, a `TestXxx` function, a method
+  `MarshalJSON` that implements `json.Marshaler`. Narrow the pattern or the
+  kinds, or, in golangci-lint, write `//nolint:defcheck` on the line.
+- The test main that `go test` generates is analyzed by another driver that
+  loads the tests, such as the `singlechecker` of `golang.org/x/tools`, and a
+  rule that matches a name in it, such as `m`, reports it there, in a file of
+  the build cache. The command and golangci-lint leave it out; such a driver
+  runs with `-test=false`.
 
 ## Development
 
