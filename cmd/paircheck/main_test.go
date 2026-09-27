@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/pragmabits/precept/internal/driver"
 )
 
 const leak = "leak.go:6:2: [resource] Open requires Close on r before function exit"
@@ -17,8 +20,8 @@ func TestAnalyzeReports(t *testing.T) {
 		t.Run(config, func(t *testing.T) {
 			t.Chdir(filepath.Join("testdata", "project"))
 			code, stdout, stderr := execute("--config", config, "./...")
-			if code != exitFindings {
-				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+			if code != driver.ExitFindings {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFindings, stderr)
 			}
 			if !strings.Contains(stdout, leak) {
 				t.Errorf("stdout = %q, want it to contain %q", stdout, leak)
@@ -40,8 +43,8 @@ func TestConfigSpellings(t *testing.T) {
 		t.Run(strings.Join(spelling, " "), func(t *testing.T) {
 			t.Chdir(filepath.Join("testdata", "project"))
 			code, stdout, stderr := execute(spelling...)
-			if code != exitFindings {
-				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+			if code != driver.ExitFindings {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFindings, stderr)
 			}
 			if !strings.Contains(stdout, leak) {
 				t.Errorf("stdout = %q, want it to contain %q", stdout, leak)
@@ -52,8 +55,8 @@ func TestConfigSpellings(t *testing.T) {
 
 func TestUnknownFlag(t *testing.T) {
 	code, _, stderr := execute("--verbose", "./...")
-	if code != exitFailed {
-		t.Errorf("exit = %d, want %d", code, exitFailed)
+	if code != driver.ExitFailed {
+		t.Errorf("exit = %d, want %d", code, driver.ExitFailed)
 	}
 	if !strings.Contains(stderr, "--verbose") {
 		t.Errorf("stderr = %q, want it to name --verbose", stderr)
@@ -62,15 +65,15 @@ func TestUnknownFlag(t *testing.T) {
 
 func TestValidateTakesTheShortFlag(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "project"))
-	if code, _, stderr := execute("validate", "-c", "rules.yml"); code != exitClean {
-		t.Errorf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
+	if code, _, stderr := execute("validate", "-c", "rules.yml"); code != driver.ExitClean {
+		t.Errorf("exit = %d, want %d; stderr: %s", code, driver.ExitClean, stderr)
 	}
 }
 
 func TestHelp(t *testing.T) {
 	code, _, stderr := execute("-h")
-	if code != exitClean {
-		t.Errorf("exit = %d, want %d", code, exitClean)
+	if code != driver.ExitClean {
+		t.Errorf("exit = %d, want %d", code, driver.ExitClean)
 	}
 	for _, flag := range []string{
 		"-c, --config",
@@ -89,11 +92,11 @@ func TestVersionFlag(t *testing.T) {
 	for _, spelling := range []string{"-v", "--version"} {
 		t.Run(spelling, func(t *testing.T) {
 			code, stdout, stderr := execute(spelling)
-			if code != exitClean {
-				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
+			if code != driver.ExitClean {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitClean, stderr)
 			}
 			info, _ := debug.ReadBuildInfo()
-			if want := version(info) + "\n"; stdout != want {
+			if want := driver.Version(info) + "\n"; stdout != want {
 				t.Errorf("stdout = %q, want %q", stdout, want)
 			}
 		})
@@ -112,7 +115,7 @@ func TestVersion(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.build, func(t *testing.T) {
-			if got := version(test.info); got != test.want {
+			if got := driver.Version(test.info); got != test.want {
 				t.Errorf("version = %q, want %q", got, test.want)
 			}
 		})
@@ -128,8 +131,8 @@ func TestAnalyzeRefusesInvalidConfig(t *testing.T) {
     transfer: true
 `)
 	code, _, stderr := execute("--config", config, "./...")
-	if code != exitFailed {
-		t.Fatalf("exit = %d, want %d", code, exitFailed)
+	if code != driver.ExitFailed {
+		t.Fatalf("exit = %d, want %d", code, driver.ExitFailed)
 	}
 	if !strings.Contains(stderr, "transfer") {
 		t.Errorf("stderr = %q, want it to name transfer", stderr)
@@ -144,8 +147,8 @@ func TestAnalyzeRefusesUnboundRule(t *testing.T) {
     satisfiers: [(*example.com/project/resource.Cache).Put]
 `)
 	code, _, stderr := execute("--config", config, "./...")
-	if code != exitFailed {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
+	if code != driver.ExitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFailed, stderr)
 	}
 	want := `rule "swap": more than one slot`
 	if strings.Count(stderr, want) != 1 {
@@ -156,8 +159,8 @@ func TestAnalyzeRefusesUnboundRule(t *testing.T) {
 func TestAnalyzePrintsLoadErrorsOnce(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "broken"))
 	code, _, stderr := execute("--config", write(t, "rules: []\n"), "./...")
-	if code != exitFailed {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
+	if code != driver.ExitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFailed, stderr)
 	}
 	want := `value.go:5:27: cannot use "value"`
 	if strings.Count(stderr, want) != 1 {
@@ -168,8 +171,8 @@ func TestAnalyzePrintsLoadErrorsOnce(t *testing.T) {
 func TestAnalyzeNamesThePackageOfAnErrorWithoutPosition(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "cycles"))
 	code, _, stderr := execute("--config", write(t, "rules: []\n"), "./...")
-	if code != exitFailed {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
+	if code != driver.ExitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFailed, stderr)
 	}
 	for _, want := range []string{
 		"example.com/cycles/first [example.com/cycles/first.test]: import cycle not allowed in test",
@@ -185,12 +188,12 @@ func TestAnalyzeReportsACycleOutsideTheTestsAsWithoutThem(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "circular"))
 	config := write(t, "rules: []\n")
 	code, _, without := execute("--config", config, "--tests=false", "./...")
-	if code != exitFailed {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, without)
+	if code != driver.ExitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFailed, without)
 	}
 	code, _, with := execute("--config", config, "./...")
-	if code != exitFailed || with != without {
-		t.Errorf("exit = %d, stderr = %q, want %d and %q", code, with, exitFailed, without)
+	if code != driver.ExitFailed || with != without {
+		t.Errorf("exit = %d, stderr = %q, want %d and %q", code, with, driver.ExitFailed, without)
 	}
 }
 
@@ -205,8 +208,8 @@ func TestAnalyzeReadsKeysInAnyCase(t *testing.T) {
           satisfiers: [(*example.com/project/resource.Resource).Close]
 `)
 	code, stdout, stderr := execute("--config", config, "./...")
-	if code != exitFindings {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+	if code != driver.ExitFindings {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFindings, stderr)
 	}
 	if !strings.Contains(stdout, leak) {
 		t.Errorf("stdout = %q, want it to contain %q", stdout, leak)
@@ -224,8 +227,8 @@ linters:
       rules: []
 `)
 	code, _, stderr := execute("--config", config, "./...")
-	if code != exitFailed {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
+	if code != driver.ExitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFailed, stderr)
 	}
 	if !strings.Contains(stderr, "differ only in case") {
 		t.Errorf("stderr = %q, want it to say the keys differ only in case", stderr)
@@ -243,8 +246,8 @@ func TestAnalyzeKeepsAMainNamedLikeATestMain(t *testing.T) {
 		t.Run(spelling, func(t *testing.T) {
 			t.Chdir(filepath.Join("testdata", "lookalike"))
 			code, stdout, stderr := execute("--config", write(t, rules), spelling, "./...")
-			if code != exitFindings {
-				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+			if code != driver.ExitFindings {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFindings, stderr)
 			}
 			if !strings.Contains(stdout, want) {
 				t.Errorf("stdout = %q, want it to contain %q", stdout, want)
@@ -283,7 +286,7 @@ func TestAnalyzeFollowsModulesDownloadMode(t *testing.T) {
 			arguments := append([]string{"--config", config}, test.flags...)
 			code, _, stderr := execute(append(arguments, "./...")...)
 			vendoring := strings.Contains(stderr, "inconsistent vendoring")
-			if code == exitFailed != test.failed || vendoring != test.failed {
+			if code == driver.ExitFailed != test.failed || vendoring != test.failed {
 				t.Errorf("exit = %d, stderr = %q, want a vendoring failure: %t", code, stderr, test.failed)
 			}
 		})
@@ -307,8 +310,14 @@ func TestAnalyzeRefusesModulesDownloadMode(t *testing.T) {
 				"linters:\n  settings:\n    paircheck:\n      rules: []\n")
 			arguments := append([]string{"--config", config}, test.flags...)
 			code, _, stderr := execute(append(arguments, "./...")...)
-			if code != exitFailed || !strings.Contains(stderr, "neither mod, readonly nor vendor") {
-				t.Errorf("exit = %d, stderr = %q, want %d and the mode refused", code, stderr, exitFailed)
+			if code != driver.ExitFailed ||
+				!strings.Contains(stderr, "neither mod, readonly nor vendor") {
+				t.Errorf(
+					"exit = %d, stderr = %q, want %d and the mode refused",
+					code,
+					stderr,
+					driver.ExitFailed,
+				)
 			}
 		})
 	}
@@ -321,13 +330,13 @@ func TestValidateFollowsBuildTags(t *testing.T) {
 		flags []string
 		code  int
 	}{
-		{name: "no tag", run: "[]", flags: nil, code: exitFailed},
-		{name: "in the file", run: "[precept]", flags: nil, code: exitClean},
+		{name: "no tag", run: "[]", flags: nil, code: driver.ExitFailed},
+		{name: "in the file", run: "[precept]", flags: nil, code: driver.ExitClean},
 		{
 			name:  "on the command line",
 			run:   "[]",
 			flags: []string{"--build-tags", "precept"},
-			code:  exitClean,
+			code:  driver.ExitClean,
 		},
 	}
 	for _, test := range tests {
@@ -366,9 +375,9 @@ func TestAnalyzeDoesNotReadAKeyAWrittenFlagReplaces(t *testing.T) {
           satisfiers: [(*example.com/project/resource.Resource).Close]
 `)
 			code, stdout, stderr := execute("--config", config, test.flag, "./...")
-			if code != exitFindings || !strings.Contains(stdout, leak) {
+			if code != driver.ExitFindings || !strings.Contains(stdout, leak) {
 				t.Errorf("exit = %d, stdout = %q, want %d and %q; stderr: %s",
-					code, stdout, exitFindings, leak, stderr)
+					code, stdout, driver.ExitFindings, leak, stderr)
 			}
 		})
 	}
@@ -384,33 +393,184 @@ linters:
       rules: []
 `)
 	code, _, stderr := execute("--config", config, "./...")
-	if code != exitFailed {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
+	if code != driver.ExitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFailed, stderr)
 	}
 	if !strings.Contains(stderr, "run.tests") {
 		t.Errorf("stderr = %q, want it to name run.tests", stderr)
 	}
 }
 
+// fileRule is the rule of testdata/generated, which leaks a file in each of
+// its files, written as the paircheck settings of a golangci-lint
+// configuration.
+const fileRule = `  settings:
+    paircheck:
+      rules:
+        - id: file
+          trigger: os.Open
+          satisfiers: [(*os.File).Close]
+`
+
+// TestAnalyzeDropsFindingsInGeneratedFiles reads linters.exclusions.generated
+// as golangci-lint does, weakly typed and under a key of any case, and drops
+// the findings in the files it takes for generated. A case with no key writes
+// generated.
+func TestAnalyzeDropsFindingsInGeneratedFiles(t *testing.T) {
+	strict := []string{"after.go", "lax.go", "plain.go"}
+	lax := []string{"plain.go"}
+	every := []string{"after.go", "lax.go", "plain.go", "strict.go"}
+	tests := []struct {
+		name     string
+		key      string
+		value    string
+		reported []string
+	}{
+		{name: "strict", value: "strict", reported: strict},
+		{name: "empty text", value: `""`, reported: strict},
+		{name: "null", value: "null", reported: strict},
+		{name: "empty map", value: "{}", reported: strict},
+		{name: "lax", value: "lax", reported: lax},
+		{name: "unknown text", value: "sometimes", reported: lax},
+		{name: "boolean", value: "false", reported: lax},
+		{name: "number", value: "2.5", reported: lax},
+		{name: "disable", value: "disable", reported: every},
+		{name: "capitalized key", key: "Generated", value: "lax", reported: lax},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "generated"))
+			key := cmp.Or(test.key, "generated")
+			config := write(t, "linters:\n  exclusions:\n    "+key+": "+test.value+"\n"+fileRule)
+			code, stdout, stderr := execute("--config", config, "./...")
+			if code != driver.ExitFindings {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFindings, stderr)
+			}
+			if got := reported(stdout); !slices.Equal(got, test.reported) {
+				t.Errorf("findings in %v, want in %v", got, test.reported)
+			}
+		})
+	}
+	unwritten := []struct {
+		file    string
+		content string
+	}{
+		{
+			file:    "own file",
+			content: "rules:\n  - id: file\n    trigger: os.Open\n    satisfiers: [(*os.File).Close]\n",
+		},
+		{
+			file:    "golangci-lint file",
+			content: "linters:\n" + fileRule,
+		},
+	}
+	for _, test := range unwritten {
+		t.Run(test.file, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "generated"))
+			code, stdout, stderr := execute("--config", write(t, test.content), "./...")
+			if code != driver.ExitFindings {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFindings, stderr)
+			}
+			if got := reported(stdout); !slices.Equal(got, strict) {
+				t.Errorf("findings in %v, want in %v", got, strict)
+			}
+		})
+	}
+}
+
+// TestAnalyzePlacesACgoFindingInTheGoFile reports a leak in a file that
+// imports C where golangci-lint places it: in that file, not in the one cgo
+// rewrites in the build cache, which is generated.
+func TestAnalyzePlacesACgoFindingInTheGoFile(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "cgo"))
+	config := write(t, "linters:\n"+fileRule)
+	code, stdout, stderr := execute("--config", config, "./...")
+	if code != driver.ExitFindings {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFindings, stderr)
+	}
+	want := "main.go:12:15: [file] Open requires Close on file before function exit"
+	if !strings.HasSuffix(strings.TrimSpace(stdout), want) {
+		t.Errorf("stdout = %q, want it to end with %q", stdout, want)
+	}
+}
+
+func TestAnalyzeRefusesGeneratedMode(t *testing.T) {
+	for _, value := range []string{"[lax]", "[]", "{mode: lax}"} {
+		t.Run(value, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "generated"))
+			config := write(t, "linters:\n  exclusions:\n    generated: "+value+"\n"+fileRule)
+			code, stdout, stderr := execute("--config", config, "./...")
+			if code != driver.ExitFailed || stdout != "" ||
+				!strings.Contains(stderr, "linters.exclusions.generated") {
+				t.Errorf(
+					"exit = %d, stdout = %q, stderr = %q, want %d and the mode refused",
+					code,
+					stdout,
+					stderr,
+					driver.ExitFailed,
+				)
+			}
+			code, _, stderr = execute("validate", "--config", config)
+			if code != driver.ExitFailed || !strings.Contains(stderr, "linters.exclusions.generated") {
+				t.Errorf("validate: exit = %d, stderr = %q, want %d and the mode refused",
+					code, stderr, driver.ExitFailed)
+			}
+		})
+	}
+}
+
+// TestRefusesNativeAndPluginSettings writes the rules both as native settings
+// and as module plugin settings: golangci-lint would apply the plugin's, and
+// the file does not say which the command applies.
+func TestRefusesNativeAndPluginSettings(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project"))
+	config := write(t, `linters:
+  settings:
+    paircheck:
+      rules: []
+    custom:
+      paircheck:
+        type: module
+        settings:
+          rules: []
+`)
+	for _, arguments := range [][]string{{"-c", config, "./..."}, {"validate", "-c", config}} {
+		t.Run(arguments[0], func(t *testing.T) {
+			code, stdout, stderr := execute(arguments...)
+			want := "both native and module plugin paircheck settings"
+			if code != driver.ExitFailed || stdout != "" || !strings.Contains(stderr, want) {
+				t.Errorf(
+					"exit = %d, stdout = %q, stderr = %q, want %d and %q",
+					code,
+					stdout,
+					stderr,
+					driver.ExitFailed,
+					want,
+				)
+			}
+		})
+	}
+}
+
 func TestRequiresConfig(t *testing.T) {
-	if code, _, _ := execute("./..."); code != exitFailed {
-		t.Errorf("exit = %d, want %d", code, exitFailed)
+	if code, _, _ := execute("./..."); code != driver.ExitFailed {
+		t.Errorf("exit = %d, want %d", code, driver.ExitFailed)
 	}
 }
 
 func TestValidateAfterFlags(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "project"))
 	code, _, stderr := execute("--config", "rules.yml", "validate")
-	if code != exitClean {
-		t.Errorf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
+	if code != driver.ExitClean {
+		t.Errorf("exit = %d, want %d; stderr: %s", code, driver.ExitClean, stderr)
 	}
 }
 
 func TestValidateAccepts(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "project"))
 	code, _, stderr := execute("validate", "--config", "rules.yml")
-	if code != exitClean {
-		t.Errorf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
+	if code != driver.ExitClean {
+		t.Errorf("exit = %d, want %d; stderr: %s", code, driver.ExitClean, stderr)
 	}
 }
 
@@ -423,8 +583,8 @@ const relative = `rules:
 func TestAnalyzeResolvesRelativeNames(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "project"))
 	code, stdout, stderr := execute("--config", write(t, relative), "./...")
-	if code != exitFindings {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+	if code != driver.ExitFindings {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFindings, stderr)
 	}
 	if !strings.Contains(stdout, leak) {
 		t.Errorf("stdout = %q, want it to contain %q", stdout, leak)
@@ -434,16 +594,16 @@ func TestAnalyzeResolvesRelativeNames(t *testing.T) {
 func TestValidateResolvesRelativeNames(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "project", "leak"))
 	code, _, stderr := execute("validate", "--config", write(t, relative))
-	if code != exitClean {
-		t.Errorf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
+	if code != driver.ExitClean {
+		t.Errorf("exit = %d, want %d; stderr: %s", code, driver.ExitClean, stderr)
 	}
 }
 
 func TestValidateRefusesRelativeNamesOutsideAModule(t *testing.T) {
 	t.Chdir(t.TempDir())
 	code, _, stderr := execute("validate", "--config", write(t, relative))
-	if code != exitFailed {
-		t.Fatalf("exit = %d, want %d", code, exitFailed)
+	if code != driver.ExitFailed {
+		t.Fatalf("exit = %d, want %d", code, driver.ExitFailed)
 	}
 	if !strings.Contains(stderr, "relative to the module") {
 		t.Errorf("stderr = %q, want it to say the name is relative to the module", stderr)
@@ -457,8 +617,8 @@ func TestValidateAcceptsFailures(t *testing.T) {
 		"--config",
 		write(t, relative+"failures: [./resource.Wrap]\n"),
 	)
-	if code != exitClean {
-		t.Errorf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
+	if code != driver.ExitClean {
+		t.Errorf("exit = %d, want %d; stderr: %s", code, driver.ExitClean, stderr)
 	}
 }
 
@@ -484,8 +644,8 @@ func TestValidateRefusesFailures(t *testing.T) {
 			t.Chdir(filepath.Join("testdata", "project"))
 			config := write(t, relative+"failures: ["+test.failure+"]\n")
 			code, _, stderr := execute("validate", "--config", config)
-			if code != exitFailed {
-				t.Fatalf("exit = %d, want %d", code, exitFailed)
+			if code != driver.ExitFailed {
+				t.Fatalf("exit = %d, want %d", code, driver.ExitFailed)
 			}
 			if !strings.Contains(stderr, test.want) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr, test.want)
@@ -542,8 +702,8 @@ func TestValidateRefuses(t *testing.T) {
 			t.Chdir(filepath.Join("testdata", "project"))
 			config := write(t, "rules:\n  - id: broken\n    "+test.rule+"\n")
 			code, _, stderr := execute("validate", "--config", config)
-			if code != exitFailed {
-				t.Fatalf("exit = %d, want %d", code, exitFailed)
+			if code != driver.ExitFailed {
+				t.Fatalf("exit = %d, want %d", code, driver.ExitFailed)
 			}
 			if !strings.Contains(stderr, test.want) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr, test.want)
@@ -554,8 +714,19 @@ func TestValidateRefuses(t *testing.T) {
 
 func execute(arguments ...string) (code int, stdout, stderr string) {
 	var output, errors bytes.Buffer
-	code = run(arguments, &output, &errors)
+	code = command.Run(arguments, &output, &errors)
 	return code, output.String(), errors.String()
+}
+
+// reported is the base name of each file with a finding in stdout, sorted.
+func reported(stdout string) []string {
+	var files []string
+	for line := range strings.Lines(strings.TrimSpace(stdout)) {
+		path, _, _ := strings.Cut(line, ":")
+		files = append(files, filepath.Base(path))
+	}
+	slices.Sort(files)
+	return files
 }
 
 func built(version string) *debug.BuildInfo {

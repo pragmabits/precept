@@ -10,26 +10,19 @@
 // in its settings, native or as a module plugin. The packages load as in
 // golangci-lint: with the test files, unless --tests=false, and under
 // --build-tags and --modules-download-mode, over the run section of a
-// golangci-lint configuration.
+// golangci-lint configuration. A finding in a generated file is dropped as
+// linters.exclusions.generated says, strict when it is not written.
 package main
 
 import (
-	"errors"
-	"fmt"
 	"io"
 	"os"
-	"runtime/debug"
 
 	"github.com/spf13/pflag"
-)
+	"golang.org/x/tools/go/packages"
 
-var errNoConfig = errors.New("-c, --config is required")
-
-// The exit codes of the analysis drivers in golang.org/x/tools.
-const (
-	exitClean    = 0
-	exitFailed   = 1
-	exitFindings = 3
+	"github.com/pragmabits/precept/internal/driver"
+	"github.com/pragmabits/precept/paircheck"
 )
 
 const (
@@ -37,98 +30,50 @@ const (
 	validation = "validate"
 )
 
-const usage = `usage: paircheck -c file packages...
+var command = driver.Command{
+	Name: linterName,
+	Synopsis: `usage: paircheck -c file packages...
        paircheck validate -c file
        paircheck -v
-
-  -c, --config file   the rules: a YAML file, or a .golangci.yml carrying them
-                      in its settings, native or as a module plugin
-      --tests         analyze the _test.go files too (default true, or
-                      run.tests of a .golangci.yml); leave them out with
-                      --tests=false
-      --build-tags list
-                      build tags, comma-separated, added to run.build-tags of
-                      a .golangci.yml
-      --modules-download-mode mode
-                      passed to go as -mod: mod, readonly or vendor, over
-                      run.modules-download-mode of a .golangci.yml
-  -v, --version       print the version and exit
-`
+`,
+	Dispatch: dispatch,
+}
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(command.Run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// run is the command: the analysis, or the validation when "validate" is the
-// first argument that is not a flag. A bare "validate" is never a package
-// pattern: it would name a standard library package that does not exist.
-func run(arguments []string, stdout, stderr io.Writer) int {
-	flags := pflag.NewFlagSet(linterName, pflag.ContinueOnError)
-	flags.SetOutput(stderr)
-	flags.Usage = func() {
-		fmt.Fprint(flags.Output(), usage)
-	}
-	path := flags.StringP("config", "c", "", "the rules")
-	flags.Bool(flagTests, true, "analyze the test files too")
-	flags.StringSlice(flagBuildTags, nil, "build tags")
-	flags.String(flagDownloadMode, "", "the modules download mode")
-	showVersion := flags.BoolP("version", "v", false, "print the version and exit")
-	err := flags.Parse(arguments)
-	if errors.Is(err, pflag.ErrHelp) {
-		return exitClean
-	}
-	if err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", linterName, err)
-		flags.Usage()
-		return exitFailed
-	}
-	if *showVersion {
-		info, _ := debug.ReadBuildInfo()
-		fmt.Fprintln(stdout, version(info))
-		return exitClean
-	}
-	positional := flags.Args()
-	validating := len(positional) > 0 && positional[0] == validation
+// dispatch runs the analysis, or the validation when "validate" is the first
+// argument that is not a flag. A bare "validate" is never a package pattern:
+// it would name a standard library package that does not exist.
+func dispatch(path string, flags *pflag.FlagSet, stdout, stderr io.Writer) (int, error) {
+	patterns := flags.Args()
+	validating := len(patterns) > 0 && patterns[0] == validation
 	if validating {
-		positional = positional[1:]
+		patterns = patterns[1:]
 	}
-	code, err := dispatch(validating, *path, flags, positional, stdout)
+	config, setup, err := driver.Read[paircheck.Config](path, linterName)
 	if err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", linterName, err)
+		return driver.ExitFailed, err
 	}
-	return code
-}
-
-func dispatch(
-	validating bool,
-	path string,
-	flags *pflag.FlagSet,
-	patterns []string,
-	stdout io.Writer,
-) (int, error) {
-	if path == "" {
-		return exitFailed, errNoConfig
-	}
-	config, section, err := readConfig(path)
+	load, err := driver.LoadingOf(setup, flags)
 	if err != nil {
-		return exitFailed, err
-	}
-	load, err := loadingOf(section, flags)
-	if err != nil {
-		return exitFailed, err
+		return driver.ExitFailed, err
 	}
 	if validating {
 		return validate(config, load)
 	}
-	return analyze(config, patterns, load, stdout)
-}
-
-// version is the version of the module the binary was built from, as the go
-// command recorded it: the tag it was installed at, a pseudo-version, or
-// (devel) when it recorded none.
-func version(info *debug.BuildInfo) string {
-	if info == nil || info.Main.Version == "" {
-		return "(devel)"
-	}
-	return info.Main.Version
+	// The module of each package is what a name relative to the module is
+	// resolved against.
+	mode := packages.LoadAllSyntax | packages.NeedModule
+	return driver.Analyze(
+		paircheck.New,
+		config,
+		mode,
+		patterns,
+		load,
+		setup.Generated,
+		stdout,
+		stderr,
+	)
 }

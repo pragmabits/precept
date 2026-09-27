@@ -1,4 +1,4 @@
-package main
+package driver
 
 import (
 	"errors"
@@ -25,68 +25,78 @@ const (
 // for, q, whose test main is q.test.
 var testVariant = regexp.MustCompile(`^(.*) \[(.*)\.test\]`)
 
-// loading is how the packages are loaded, as the run section of a
+// Loading is how the packages are loaded, as the run section of a
 // golangci-lint configuration says: with their tests or without them, under
 // the build tags, and in the modules download mode.
-type loading struct {
-	tests        bool
-	buildTags    []string
-	downloadMode string
+type Loading struct {
+	Tests        bool
+	BuildTags    []string
+	DownloadMode string
 }
 
-// loadingOf is the load that the run section of a golangci-lint configuration
-// and the command line ask for, as golangci-lint reads them. A flag written on
-// the command line replaces its key, which is then not read from the file, as
-// viper takes a changed flag first; --build-tags adds to run.build-tags, which
-// is read either way; and a key neither writes keeps its default. The mode is
-// checked once it is settled. The command's own file has no run section.
-func loadingOf(section map[string]any, flags *pflag.FlagSet) (loading, error) {
-	var load loading
+// LoadingOf is the load that the run section of a golangci-lint
+// configuration and the command line ask for, as golangci-lint reads them. A
+// flag written on the command line replaces its key, which is then not read
+// from the file, as viper takes a changed flag first; --build-tags adds to
+// run.build-tags, which is read either way; and a key neither writes keeps its
+// default. The mode is checked once it is settled. The command's own file has
+// no run section.
+func LoadingOf(setup Setup, flags *pflag.FlagSet) (Loading, error) {
+	section := setup.section
+	var load Loading
 	var err error
 	if flags.Changed(flagTests) {
-		load.tests, err = flags.GetBool(flagTests)
+		load.Tests, err = flags.GetBool(flagTests)
 	} else {
-		load.tests, err = testsOf(section[flagTests])
+		load.Tests, err = testsOf(section[flagTests])
 	}
 	if err != nil {
-		return loading{}, err
+		return Loading{}, err
 	}
-	if load.buildTags, err = tagsOf(section[flagBuildTags]); err != nil {
-		return loading{}, err
+	if load.BuildTags, err = tagsOf(section[flagBuildTags]); err != nil {
+		return Loading{}, err
 	}
 	if flags.Changed(flagBuildTags) {
 		added, err := flags.GetStringSlice(flagBuildTags)
 		if err != nil {
-			return loading{}, err
+			return Loading{}, err
 		}
-		load.buildTags = append(load.buildTags, added...)
+		load.BuildTags = append(load.BuildTags, added...)
 	}
 	if flags.Changed(flagDownloadMode) {
-		load.downloadMode, err = flags.GetString(flagDownloadMode)
+		load.DownloadMode, err = flags.GetString(flagDownloadMode)
 	} else {
-		load.downloadMode, err = modeOf(section[flagDownloadMode])
+		load.DownloadMode, err = modeOf(section[flagDownloadMode])
 	}
 	if err != nil {
-		return loading{}, err
+		return Loading{}, err
 	}
-	if !slices.Contains([]string{"", "mod", "readonly", "vendor"}, load.downloadMode) {
-		return loading{}, fmt.Errorf("%w: %s", errMode, load.downloadMode)
+	if !slices.Contains([]string{"", "mod", "readonly", "vendor"}, load.DownloadMode) {
+		return Loading{}, fmt.Errorf("%w: %s", errMode, load.DownloadMode)
 	}
 	return load, nil
 }
 
-// packagesConfig is what go/packages loads with: the tests, and the build
+// Config is what go/packages loads with in mode: the tests, and the build
 // flags golangci-lint passes go (makeBuildFlags, pkg/lint/package.go), but
 // -buildvcs=false, which go/packages passes itself.
-func (l loading) packagesConfig(mode packages.LoadMode) *packages.Config {
+func (l Loading) Config(mode packages.LoadMode) *packages.Config {
 	var flags []string
-	if len(l.buildTags) > 0 {
-		flags = append(flags, "-tags", strings.Join(l.buildTags, " "))
+	if len(l.BuildTags) > 0 {
+		flags = append(flags, "-tags", strings.Join(l.BuildTags, " "))
 	}
-	if l.downloadMode != "" {
-		flags = append(flags, "-mod="+l.downloadMode)
+	if l.DownloadMode != "" {
+		flags = append(flags, "-mod="+l.DownloadMode)
 	}
-	return &packages.Config{Mode: mode, Tests: l.tests, BuildFlags: flags}
+	return &packages.Config{Mode: mode, Tests: l.Tests, BuildFlags: flags}
+}
+
+// addFlags adds to flags the flags that write over the run section of a
+// golangci-lint configuration, which LoadingOf reads.
+func addFlags(flags *pflag.FlagSet) {
+	flags.Bool(flagTests, true, "analyze the test files too")
+	flags.StringSlice(flagBuildTags, nil, "build tags")
+	flags.String(flagDownloadMode, "", "the modules download mode")
 }
 
 // split separates packages loaded with their tests into plain, the packages
