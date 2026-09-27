@@ -22,48 +22,49 @@ const (
 )
 
 func TestGolangciReports(t *testing.T) {
-	code, stdout, stderr := golangci(
-		t,
-		"run",
-		"-c",
-		golangciConfig(t, settingsOf(t, rules), nil),
-		"./...",
-	)
-	if code != golangciIssues {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
-	}
-	compare(t, findings(t, stdout, " (paircheck)"))
-}
-
-func TestGolangciRefuses(t *testing.T) {
-	for _, current := range refusals {
-		t.Run(filepath.Base(current.file), func(t *testing.T) {
-			code, _, stderr := golangci(
-				t,
-				"run",
-				"-c",
-				golangciConfig(t, settingsOf(t, current.file), nil),
-				"./...",
-			)
-			// golangci-lint quotes the error inside its log line.
-			unquoted := strings.ReplaceAll(stderr, `\"`, `"`)
-			if code != golangciFailed || !refused(unquoted, current) {
-				t.Errorf(
-					"exit = %d, stderr = %q, want %d and %q",
-					code,
-					stderr,
-					golangciFailed,
-					current.want,
-				)
+	for _, current := range linters() {
+		t.Run(current.name, func(t *testing.T) {
+			config := current.golangciConfig(t, settingsOf(t, current.rules), nil)
+			code, stdout, stderr := current.golangci(t, "run", "-c", config, "./...")
+			if code != golangciIssues {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
 			}
+			current.compare(t, current.findings(t, stdout, " ("+current.name+")"))
 		})
 	}
 }
 
+func TestGolangciRefuses(t *testing.T) {
+	for _, current := range linters() {
+		for _, rejected := range current.refused {
+			t.Run(current.name+" "+filepath.Base(rejected.file), func(t *testing.T) {
+				config := current.golangciConfig(t, settingsOf(t, rejected.file), nil)
+				code, _, stderr := current.golangci(t, "run", "-c", config, "./...")
+				// golangci-lint quotes the error inside its log line.
+				unquoted := strings.ReplaceAll(stderr, `\"`, `"`)
+				if code != golangciFailed || !refused(unquoted, rejected) {
+					t.Errorf(
+						"exit = %d, stderr = %q, want %d and %q",
+						code,
+						stderr,
+						golangciFailed,
+						rejected.want,
+					)
+				}
+			})
+		}
+	}
+}
+
 func TestGolangciWithoutSettings(t *testing.T) {
-	code, stdout, stderr := golangci(t, "run", "-c", golangciConfig(t, nil, nil), "./...")
-	if code != 0 || stdout != "" {
-		t.Errorf("exit = %d, stdout = %q, want 0 and no issue; stderr: %s", code, stdout, stderr)
+	for _, current := range linters() {
+		t.Run(current.name, func(t *testing.T) {
+			config := current.golangciConfig(t, nil, nil)
+			code, stdout, stderr := current.golangci(t, "run", "-c", config, "./...")
+			if code != 0 || stdout != "" {
+				t.Errorf("exit = %d, stdout = %q, want 0 and no issue; stderr: %s", code, stdout, stderr)
+			}
+		})
 	}
 }
 
@@ -73,12 +74,16 @@ func TestGolangciFollowsRunTests(t *testing.T) {
 	for _, test := range runTestsValues {
 		t.Run(test.name, func(t *testing.T) {
 			run := map[string]any{cmp.Or(test.key, "tests"): test.value}
-			config := golangciConfig(t, settingsOf(t, rules), run)
-			code, stdout, stderr := golangci(t, "run", "-c", config, "./...")
+			config := paircheck.golangciConfig(t, settingsOf(t, rules), run)
+			code, stdout, stderr := paircheck.golangci(t, "run", "-c", config, "./...")
 			if code != golangciIssues {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
 			}
-			compareWith(t, findings(t, stdout, " (paircheck)"), expected(t, test.analyzed, false))
+			compareWith(
+				t,
+				paircheck.findings(t, stdout, " (paircheck)"),
+				paircheck.expected(t, test.analyzed, false, generatedStrict),
+			)
 		})
 	}
 }
@@ -88,12 +93,16 @@ func TestGolangciFollowsRunTests(t *testing.T) {
 func TestGolangciFlagWinsOverRunTests(t *testing.T) {
 	for _, test := range flagsOverRunTests {
 		t.Run(test.flag, func(t *testing.T) {
-			config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.run})
-			code, stdout, stderr := golangci(t, "run", "-c", config, test.flag, "./...")
+			config := paircheck.golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.run})
+			code, stdout, stderr := paircheck.golangci(t, "run", "-c", config, test.flag, "./...")
 			if code != golangciIssues {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
 			}
-			compareWith(t, findings(t, stdout, " (paircheck)"), expected(t, test.analyzed, false))
+			compareWith(
+				t,
+				paircheck.findings(t, stdout, " (paircheck)"),
+				paircheck.expected(t, test.analyzed, false, generatedStrict),
+			)
 		})
 	}
 }
@@ -103,12 +112,16 @@ func TestGolangciFlagWinsOverRunTests(t *testing.T) {
 func TestGolangciSkipsAKeyAFlagReplaces(t *testing.T) {
 	for _, test := range flagsOverInvalidKeys {
 		t.Run(test.name, func(t *testing.T) {
-			config := golangciConfig(t, settingsOf(t, rules), test.run)
-			code, stdout, stderr := golangci(t, "run", "-c", config, test.flag, "./...")
+			config := paircheck.golangciConfig(t, settingsOf(t, rules), test.run)
+			code, stdout, stderr := paircheck.golangci(t, "run", "-c", config, test.flag, "./...")
 			if code != golangciIssues {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
 			}
-			compareWith(t, findings(t, stdout, " (paircheck)"), expected(t, test.analyzed, false))
+			compareWith(
+				t,
+				paircheck.findings(t, stdout, " (paircheck)"),
+				paircheck.expected(t, test.analyzed, false, generatedStrict),
+			)
 		})
 	}
 }
@@ -118,13 +131,17 @@ func TestGolangciSkipsAKeyAFlagReplaces(t *testing.T) {
 func TestGolangciFollowsBuildTags(t *testing.T) {
 	for _, test := range buildTags {
 		t.Run(test.name, func(t *testing.T) {
-			config := golangciConfig(t, settingsOf(t, rules), withBuildTags(test.run))
+			config := paircheck.golangciConfig(t, settingsOf(t, rules), withBuildTags(test.run))
 			arguments := append([]string{"run", "-c", config}, test.flags...)
-			code, stdout, stderr := golangci(t, append(arguments, "./...")...)
+			code, stdout, stderr := paircheck.golangci(t, append(arguments, "./...")...)
 			if code != golangciIssues {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
 			}
-			compareWith(t, findings(t, stdout, " (paircheck)"), expected(t, true, test.tagged))
+			compareWith(
+				t,
+				paircheck.findings(t, stdout, " (paircheck)"),
+				paircheck.expected(t, true, test.tagged, generatedStrict),
+			)
 		})
 	}
 }
@@ -132,11 +149,11 @@ func TestGolangciFollowsBuildTags(t *testing.T) {
 // TestGolangciSkipsTestMain runs a rule only the generated test main could
 // bind.
 func TestGolangciSkipsTestMain(t *testing.T) {
-	code, stdout, stderr := golangci(
+	code, stdout, stderr := paircheck.golangci(
 		t,
 		"run",
 		"-c",
-		golangciConfig(t, settingsOf(t, testMain), nil),
+		paircheck.golangciConfig(t, settingsOf(t, testMain), nil),
 		"./...",
 	)
 	if code != 0 || stdout != "" {
@@ -145,7 +162,13 @@ func TestGolangciSkipsTestMain(t *testing.T) {
 }
 
 func TestGolangciVerifiesExample(t *testing.T) {
-	code, _, stderr := golangci(t, "config", "verify", "-c", absolute(t, "../golangci.example.yml"))
+	code, _, stderr := paircheck.golangci(
+		t,
+		"config",
+		"verify",
+		"-c",
+		absolute(t, "../golangci.example.yml"),
+	)
 	if code != 0 {
 		t.Errorf("exit = %d, want 0; stderr: %s", code, stderr)
 	}
@@ -153,12 +176,31 @@ func TestGolangciVerifiesExample(t *testing.T) {
 
 // golangci runs golangci-lint with the plugins in the project, with a cache of
 // its own.
-func golangci(t *testing.T, arguments ...string) (code int, stdout, stderr string) {
+func (l linter) golangci(t *testing.T, arguments ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	binary := os.Getenv(golangciVariable)
 	if binary == "" {
 		t.Fatalf("%s is not set: run make e2e", golangciVariable)
 	}
 	cache := "GOLANGCI_LINT_CACHE=" + t.TempDir()
-	return execute(t, []string{cache}, binary, arguments...)
+	return l.execute(t, []string{cache}, binary, arguments...)
+}
+
+// TestGolangciFollowsGenerated writes each mode of
+// linters.exclusions.generated TestCommandFollowsGenerated writes, with the
+// same outcome.
+func TestGolangciFollowsGenerated(t *testing.T) {
+	for _, current := range linters() {
+		for _, mode := range generatedModes {
+			t.Run(current.name+" "+mode, func(t *testing.T) {
+				config := current.golangciGenerated(t, settingsOf(t, current.rules), mode)
+				code, stdout, stderr := current.golangci(t, "run", "-c", config, "./...")
+				if code != golangciIssues {
+					t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
+				}
+				suffix := " (" + current.name + ")"
+				compareWith(t, current.findings(t, stdout, suffix), current.expected(t, true, false, mode))
+			})
+		}
+	}
 }

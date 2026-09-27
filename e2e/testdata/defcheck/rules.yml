@@ -1,0 +1,12 @@
+# Every rule the project under testdata/defcheck/project is checked against.
+# The first two are the README's own; the project's `// want` comments say
+# what each rule reports.
+rules:
+  - pattern: '^cfg$'
+    kinds: [local-var, parameter, field]
+    message: avoid the cfg abbreviation
+
+  - pattern: '(?i)manager$'
+    kinds: [package-var, field, function, method]
+
+  - pattern: '^mgr'

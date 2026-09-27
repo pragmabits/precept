@@ -1,0 +1,4 @@
+# A kind no declaration has.
+rules:
+  - pattern: '^cfg$'
+    kinds: [variable]

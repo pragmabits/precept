@@ -1,6 +1,8 @@
 package e2e_test
 
 import (
+	"go/ast"
+	"go/token"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -17,27 +19,17 @@ import (
 )
 
 func TestPluginReports(t *testing.T) {
-	graph := analyze(t, pluginAnalyzers(t, rules))
-	var got []diagnostic
-	for _, root := range graph.Roots {
-		if root.Err != nil {
-			t.Fatalf("%s: %v", root, root.Err)
-		}
-		for _, finding := range root.Diagnostics {
-			at := root.Package.Fset.Position(finding.Pos)
-			got = append(got, diagnostic{
-				file:    relative(t, at.Filename),
-				line:    at.Line,
-				message: finding.Message,
-			})
-		}
+	for _, current := range linters() {
+		t.Run(current.name, func(t *testing.T) {
+			graph := current.analyze(t, current.pluginAnalyzers(t, current.rules))
+			current.compare(t, current.reported(t, graph))
+		})
 	}
-	compare(t, got)
 }
 
 // TestPluginSkipsTestMain runs a rule only the generated test main could bind.
 func TestPluginSkipsTestMain(t *testing.T) {
-	graph := analyze(t, pluginAnalyzers(t, testMain))
+	graph := paircheck.analyze(t, paircheck.pluginAnalyzers(t, testMain))
 	for _, root := range graph.Roots {
 		if root.Err != nil || len(root.Diagnostics) > 0 {
 			t.Errorf("%s: error %v, %d diagnostics, want none", root, root.Err, len(root.Diagnostics))
@@ -45,21 +37,30 @@ func TestPluginSkipsTestMain(t *testing.T) {
 	}
 }
 
-// TestPluginWithoutSettings hands the plugin what golangci-lint hands it when
-// paircheck is enabled with no settings.
+// TestPluginWithoutSettings hands each plugin what golangci-lint hands it
+// when its linter is enabled with no settings.
 func TestPluginWithoutSettings(t *testing.T) {
-	graph := analyze(t, pluginAnalyzersOf(t, nil))
-	for _, root := range graph.Roots {
-		if root.Err != nil || len(root.Diagnostics) > 0 {
-			t.Errorf("%s: error %v, %d diagnostics, want none", root, root.Err, len(root.Diagnostics))
-		}
+	for _, current := range linters() {
+		t.Run(current.name, func(t *testing.T) {
+			graph := current.analyze(t, current.pluginAnalyzersOf(t, nil))
+			for _, root := range graph.Roots {
+				if root.Err != nil || len(root.Diagnostics) > 0 {
+					t.Errorf(
+						"%s: error %v, %d diagnostics, want none",
+						root,
+						root.Err,
+						len(root.Diagnostics),
+					)
+				}
+			}
+		})
 	}
 }
 
 func TestPluginRefuses(t *testing.T) {
-	for _, current := range refusals {
+	for _, current := range paircheck.refused {
 		t.Run(filepath.Base(current.file), func(t *testing.T) {
-			graph := analyze(t, pluginAnalyzers(t, current.file))
+			graph := paircheck.analyze(t, paircheck.pluginAnalyzers(t, current.file))
 			failed := slices.ContainsFunc(graph.Roots, func(root *checker.Action) bool {
 				return root.Err != nil && refused(root.Err.Error(), current)
 			})
@@ -70,18 +71,18 @@ func TestPluginRefuses(t *testing.T) {
 	}
 }
 
-// pluginAnalyzers builds the analyzers of the registered plugin from the rules
-// in path, handed over the way golangci-lint hands them.
-func pluginAnalyzers(t *testing.T, path string) []*analysis.Analyzer {
+// pluginAnalyzers builds the analyzers of the linter's registered plugin from
+// the rules in path, handed over the way golangci-lint hands them.
+func (l linter) pluginAnalyzers(t *testing.T, path string) []*analysis.Analyzer {
 	t.Helper()
-	return pluginAnalyzersOf(t, settingsOf(t, path))
+	return l.pluginAnalyzersOf(t, settingsOf(t, path))
 }
 
-// pluginAnalyzersOf builds the analyzers of the registered plugin from
-// settings.
-func pluginAnalyzersOf(t *testing.T, settings any) []*analysis.Analyzer {
+// pluginAnalyzersOf builds the analyzers of the linter's registered plugin
+// from settings.
+func (l linter) pluginAnalyzersOf(t *testing.T, settings any) []*analysis.Analyzer {
 	t.Helper()
-	constructor, err := register.GetPlugin("paircheck")
+	constructor, err := register.GetPlugin(l.name)
 	if err != nil {
 		t.Fatalf("GetPlugin: %v", err)
 	}
@@ -98,12 +99,12 @@ func pluginAnalyzersOf(t *testing.T, settings any) []*analysis.Analyzer {
 
 // analyze runs analyzers over every package of the project, loaded with its
 // module and its tests as golangci-lint loads it.
-func analyze(t *testing.T, analyzers []*analysis.Analyzer) *checker.Graph {
+func (l linter) analyze(t *testing.T, analyzers []*analysis.Analyzer) *checker.Graph {
 	t.Helper()
 	loaded, err := packages.Load(
 		&packages.Config{
 			Mode:  packages.LoadAllSyntax | packages.NeedModule,
-			Dir:   project,
+			Dir:   l.project,
 			Tests: true,
 		},
 		"./...",
@@ -119,6 +120,50 @@ func analyze(t *testing.T, analyzers []*analysis.Analyzer) *checker.Graph {
 		t.Fatalf("Analyze: %v", err)
 	}
 	return graph
+}
+
+// reported is the diagnostics of the roots of graph that golangci-lint
+// prints by default, where it places them: all but those in a file of
+// generated code by the Go convention (linters.exclusions.generated: strict).
+func (l linter) reported(t *testing.T, graph *checker.Graph) []diagnostic {
+	t.Helper()
+	var got []diagnostic
+	for _, root := range graph.Roots {
+		if root.Err != nil {
+			t.Fatalf("%s: %v", root, root.Err)
+		}
+		for _, finding := range root.Diagnostics {
+			if generated(root.Package, finding.Pos) {
+				continue
+			}
+			at := placed(root.Package.Fset, finding.Pos)
+			got = append(got, diagnostic{
+				file:    l.relative(t, at.Filename),
+				line:    at.Line,
+				message: finding.Message,
+			})
+		}
+	}
+	return got
+}
+
+// generated reports whether position is in a file of loaded that follows the
+// Go convention for generated code, as golangci-lint's strict mode reads it.
+func generated(loaded *packages.Package, position token.Pos) bool {
+	return slices.ContainsFunc(loaded.Syntax, func(file *ast.File) bool {
+		return file.FileStart <= position && position <= file.FileEnd && ast.IsGenerated(file)
+	})
+}
+
+// placed is where golangci-lint places pos (GetFilePositionFor,
+// pkg/goanalysis/position.go): where a line directive maps it, when that is a
+// Go file, and otherwise where it is.
+func placed(files *token.FileSet, pos token.Pos) token.Position {
+	mapped := files.PositionFor(pos, true)
+	if filepath.Ext(mapped.Filename) != ".go" {
+		return files.PositionFor(pos, false)
+	}
+	return mapped
 }
 
 // testVariant matches the ID of a test variant as golangci-lint does
@@ -147,4 +192,21 @@ func analyzed(loaded []*packages.Package) []*packages.Package {
 		}
 	}
 	return kept
+}
+
+// TestPluginDefcheckRefuses hands the plugin each configuration defcheck
+// refuses, which the plugin refuses before any package is analyzed.
+func TestPluginDefcheckRefuses(t *testing.T) {
+	constructor, err := register.GetPlugin(defcheck.name)
+	if err != nil {
+		t.Fatalf("GetPlugin: %v", err)
+	}
+	for _, current := range defcheck.refused {
+		t.Run(filepath.Base(current.file), func(t *testing.T) {
+			_, err := constructor(settingsOf(t, current.file))
+			if err == nil || !refused(err.Error(), current) {
+				t.Errorf("constructor error = %v, want %q", err, current.want)
+			}
+		})
+	}
 }

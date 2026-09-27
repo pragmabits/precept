@@ -1,7 +1,7 @@
-// Package e2e_test checks the paircheck command, the module plugin and
-// golangci-lint against one project, whose source says in `// want` comments
-// what each rule reports on each line. A diagnostic no comment expects fails,
-// and so does a comment no diagnostic meets.
+// Package e2e_test checks the command of each analyzer, the module plugin and
+// golangci-lint against a project per analyzer, whose source says in
+// `// want` comments what each rule reports on each line. A diagnostic no
+// comment expects fails, and so does a comment no diagnostic meets.
 package e2e_test
 
 import (
@@ -23,10 +23,50 @@ import (
 )
 
 const (
-	project  = "testdata/project"
 	rules    = "testdata/rules.yml"
 	empty    = "testdata/empty.yml"
 	testMain = "testdata/testmain.yml"
+)
+
+// linter is an analyzer of this module as the suite checks it: its name, the
+// project whose `// want` comments say what its rules report, the rules, the
+// configurations it refuses, and its command, which TestMain builds.
+type linter struct {
+	name    string
+	project string
+	rules   string
+	refused []refusal
+	command string
+}
+
+var (
+	paircheck = linter{
+		name:    "paircheck",
+		project: "testdata/project",
+		rules:   rules,
+		refused: refusals,
+	}
+	defcheck = linter{
+		name:    "defcheck",
+		project: "testdata/defcheck/project",
+		rules:   "testdata/defcheck/rules.yml",
+		refused: defcheckRefusals,
+	}
+)
+
+// linters is each linter of the suite, with the command TestMain built.
+func linters() []linter {
+	return []linter{paircheck, defcheck}
+}
+
+// The modes of linters.exclusions.generated, which say which generated files
+// a finding in is dropped. A project has one file of each kind in generated/:
+// strict.go follows the Go convention for generated code, and lax.go only
+// says it is generated in a comment.
+const (
+	generatedStrict  = "strict"
+	generatedLax     = "lax"
+	generatedDisable = "disable"
 )
 
 // runTestsValues is what golangci-lint reads in run.tests, weakly typed and
@@ -180,20 +220,40 @@ var refusals = []refusal{
 	},
 }
 
+// defcheckRefusals are the configurations defcheck refuses before it analyzes
+// a package.
+var defcheckRefusals = []refusal{
+	{
+		file: "testdata/defcheck/refused/pattern.yml",
+		want: "rule 0: pattern is not a regular expression: " +
+			"error parsing regexp: missing closing ): `(cfg`",
+	},
+	{
+		file: "testdata/defcheck/refused/kind.yml",
+		want: `rule 0: kind is not function, method, package-var, local-var, constant, field, ` +
+			`parameter, receiver, result, type or type-parameter: "variable"`,
+	},
+	{
+		file: "testdata/defcheck/refused/duplicate.yml",
+		want: "rule 1: rule repeats the pattern, kinds and message of another rule: rule 0",
+	},
+}
+
+// generatedModes is each mode of linters.exclusions.generated a test writes.
+var generatedModes = []string{generatedStrict, generatedLax, generatedDisable}
+
 var (
 	wantComment = regexp.MustCompile(`// want (.*)$`)
 	literal     = regexp.MustCompile("`[^`]*`" + `|"(?:[^"\\]|\\.)*"`)
 	position    = regexp.MustCompile(`^(.+?):(\d+):\d+: (.+)$`)
 )
 
-// command is the paircheck binary TestMain builds from this module.
-var command string
-
 func TestMain(m *testing.M) {
 	os.Exit(runTests(m))
 }
 
-// runTests builds the command once for every test, and removes it after.
+// runTests builds the command of each linter once for every test, and removes
+// them after.
 func runTests(m *testing.M) int {
 	directory, err := os.MkdirTemp("", "precept-e2e")
 	if err != nil {
@@ -201,11 +261,19 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 	defer os.RemoveAll(directory)
-	command = filepath.Join(directory, "paircheck")
-	build := exec.Command("go", "build", "-o", command, "github.com/pragmabits/precept/cmd/paircheck")
-	if output, err := build.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "build the command: %v\n%s", err, output)
-		return 1
+	for _, current := range []*linter{&paircheck, &defcheck} {
+		current.command = filepath.Join(directory, current.name)
+		build := exec.Command(
+			"go",
+			"build",
+			"-o",
+			current.command,
+			"github.com/pragmabits/precept/cmd/"+current.name,
+		)
+		if output, err := build.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "build the %s command: %v\n%s", current.name, err, output)
+			return 1
+		}
 	}
 	return m.Run()
 }
@@ -225,10 +293,10 @@ type expectation struct {
 }
 
 // compare checks got against the expectations a run with the defaults meets:
-// the test files analyzed, and no build tag.
-func compare(t *testing.T, got []diagnostic) {
+// the test files analyzed, no build tag, and generated files strict.
+func (l linter) compare(t *testing.T, got []diagnostic) {
 	t.Helper()
-	compareWith(t, got, expected(t, true, false))
+	compareWith(t, got, l.expected(t, true, false, generatedStrict))
 }
 
 // compareWith reports every diagnostic no expectation in pending matches, and
@@ -252,21 +320,25 @@ func compareWith(t *testing.T, got []diagnostic, pending []expectation) {
 }
 
 // expected is the expectations of the project a run meets with the test files
-// analyzed or not, and with the precept build tag or without it, which leaves
-// the package tagged out.
-func expected(t *testing.T, tests, tagged bool) []expectation {
+// analyzed or not, with the precept build tag or without it, which leaves the
+// package tagged out, and in the generated mode, which drops the findings in
+// generated/strict.go unless it is disable, and those in generated/lax.go
+// when it is lax.
+func (l linter) expected(t *testing.T, tests, tagged bool, generated string) []expectation {
 	t.Helper()
-	return slices.DeleteFunc(expectations(t), func(want expectation) bool {
+	return slices.DeleteFunc(l.expectations(t), func(want expectation) bool {
 		test := strings.HasSuffix(want.file, "_test.go")
 		underTag := strings.HasPrefix(want.file, "tagged/")
-		return test && !tests || underTag && !tagged
+		dropped := want.file == "generated/strict.go" && generated != generatedDisable ||
+			want.file == "generated/lax.go" && generated == generatedLax
+		return test && !tests || underTag && !tagged || dropped
 	})
 }
 
 // expectations reads the `// want` comments of every file of the project.
-func expectations(t *testing.T) []expectation {
+func (l linter) expectations(t *testing.T) []expectation {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(project, "*", "*.go"))
+	files, err := filepath.Glob(filepath.Join(l.project, "*", "*.go"))
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
@@ -276,7 +348,7 @@ func expectations(t *testing.T) []expectation {
 		if err != nil {
 			t.Fatalf("ReadFile: %v", err)
 		}
-		file := relative(t, absolute(t, path))
+		file := l.relative(t, absolute(t, path))
 		for index, text := range strings.Split(string(content), "\n") {
 			match := wantComment.FindStringSubmatch(text)
 			if match == nil {
@@ -300,7 +372,7 @@ func expectations(t *testing.T) []expectation {
 
 // findings parses output made only of file:line:column: message lines, with
 // suffix cut from each message.
-func findings(t *testing.T, output, suffix string) []diagnostic {
+func (l linter) findings(t *testing.T, output, suffix string) []diagnostic {
 	t.Helper()
 	var found []diagnostic
 	for _, text := range strings.Split(strings.TrimSpace(output), "\n") {
@@ -317,7 +389,7 @@ func findings(t *testing.T, output, suffix string) []diagnostic {
 			t.Fatalf("Atoi: %v", err)
 		}
 		found = append(found, diagnostic{
-			file:    relative(t, match[1]),
+			file:    l.relative(t, match[1]),
 			line:    line,
 			message: strings.TrimSuffix(match[3], suffix),
 		})
@@ -327,9 +399,9 @@ func findings(t *testing.T, output, suffix string) []diagnostic {
 
 // relative is path from the root of the project, in slashes. A relative path
 // is taken as already relative to the project, as golangci-lint prints it.
-func relative(t *testing.T, path string) string {
+func (l linter) relative(t *testing.T, path string) string {
 	t.Helper()
-	root := absolute(t, project)
+	root := absolute(t, l.project)
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(root, path)
 	}
@@ -351,7 +423,7 @@ func absolute(t *testing.T, path string) string {
 
 // execute runs name in the project with environment added to the current
 // one, and returns its exit code and output.
-func execute(
+func (l linter) execute(
 	t *testing.T,
 	environment []string,
 	name string,
@@ -360,7 +432,7 @@ func execute(
 	t.Helper()
 	var output, failures bytes.Buffer
 	process := exec.Command(name, arguments...)
-	process.Dir = project
+	process.Dir = l.project
 	process.Env = append(os.Environ(), environment...)
 	process.Stdout = &output
 	process.Stderr = &failures
@@ -387,12 +459,30 @@ func settingsOf(t *testing.T, path string) map[string]any {
 	return settings
 }
 
-// golangciConfig writes a golangci-lint configuration running only paircheck
+// golangciConfig writes a golangci-lint configuration running only the linter
+// as a module plugin, with settings, or with none when settings is nil, and
+// with run added to its run section.
+func (l linter) golangciConfig(t *testing.T, settings, run map[string]any) string {
+	t.Helper()
+	return writeConfig(t, l.golangciDocument(settings, run))
+}
+
+// golangciGenerated writes the golangci-lint configuration of golangciConfig,
+// with no run section added, and with linters.exclusions.generated written as
+// mode.
+func (l linter) golangciGenerated(t *testing.T, settings map[string]any, mode string) string {
+	t.Helper()
+	document := l.golangciDocument(settings, nil)
+	linters, _ := document["linters"].(map[string]any)
+	linters["exclusions"] = map[string]any{"generated": mode}
+	return writeConfig(t, document)
+}
+
+// golangciDocument is a golangci-lint configuration running only the linter
 // as a module plugin, with settings, or with none when settings is nil, and
 // with run added to its run section. Paths are printed relative to the
 // project, one line per issue, with no cap on the count.
-func golangciConfig(t *testing.T, settings, run map[string]any) string {
-	t.Helper()
+func (l linter) golangciDocument(settings, run map[string]any) map[string]any {
 	plugin := map[string]any{"type": "module"}
 	if settings != nil {
 		plugin["settings"] = settings
@@ -404,10 +494,10 @@ func golangciConfig(t *testing.T, settings, run map[string]any) string {
 		"run":     section,
 		"linters": map[string]any{
 			"default": "none",
-			"enable":  []string{"paircheck"},
+			"enable":  []string{l.name},
 			"settings": map[string]any{
 				"custom": map[string]any{
-					"paircheck": plugin,
+					l.name: plugin,
 				},
 			},
 		},
@@ -427,7 +517,13 @@ func golangciConfig(t *testing.T, settings, run map[string]any) string {
 			"show-stats": false,
 		},
 	}
-	content, err := yaml.Marshal(config)
+	return config
+}
+
+// writeConfig writes document as a YAML file, and returns its path.
+func writeConfig(t *testing.T, document map[string]any) string {
+	t.Helper()
+	content, err := yaml.Marshal(document)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}

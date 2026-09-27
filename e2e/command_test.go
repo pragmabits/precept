@@ -16,20 +16,25 @@ const (
 )
 
 func TestCommandReports(t *testing.T) {
-	code, stdout, stderr := execute(t, nil, command, "-c", absolute(t, rules), "./...")
-	if code != exitFindings {
-		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+	for _, current := range linters() {
+		t.Run(current.name, func(t *testing.T) {
+			config := absolute(t, current.rules)
+			code, stdout, stderr := current.execute(t, nil, current.command, "-c", config, "./...")
+			if code != exitFindings {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+			}
+			current.compare(t, current.findings(t, stdout, ""))
+		})
 	}
-	compare(t, findings(t, stdout, ""))
 }
 
 // TestCommandWithoutTests leaves the test files out, and reports the rest of
 // the project as without the flag.
 func TestCommandWithoutTests(t *testing.T) {
-	code, stdout, stderr := execute(
+	code, stdout, stderr := paircheck.execute(
 		t,
 		nil,
-		command,
+		paircheck.command,
 		"-c",
 		absolute(t, rules),
 		"--tests=false",
@@ -38,7 +43,11 @@ func TestCommandWithoutTests(t *testing.T) {
 	if code != exitFindings {
 		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 	}
-	compareWith(t, findings(t, stdout, ""), expected(t, false, false))
+	compareWith(
+		t,
+		paircheck.findings(t, stdout, ""),
+		paircheck.expected(t, false, false, generatedStrict),
+	)
 }
 
 // TestCommandFollowsRunTests reads run.tests of a golangci-lint configuration
@@ -47,21 +56,25 @@ func TestCommandFollowsRunTests(t *testing.T) {
 	for _, test := range runTestsValues {
 		t.Run(test.name, func(t *testing.T) {
 			run := map[string]any{cmp.Or(test.key, "tests"): test.value}
-			config := golangciConfig(t, settingsOf(t, rules), run)
-			code, stdout, stderr := execute(t, nil, command, "-c", config, "./...")
+			config := paircheck.golangciConfig(t, settingsOf(t, rules), run)
+			code, stdout, stderr := paircheck.execute(t, nil, paircheck.command, "-c", config, "./...")
 			if code != exitFindings {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 			}
-			compareWith(t, findings(t, stdout, ""), expected(t, test.analyzed, false))
+			compareWith(
+				t,
+				paircheck.findings(t, stdout, ""),
+				paircheck.expected(t, test.analyzed, false, generatedStrict),
+			)
 		})
 	}
 	t.Run("unset", func(t *testing.T) {
-		config := golangciConfig(t, settingsOf(t, rules), nil)
-		code, stdout, stderr := execute(t, nil, command, "-c", config, "./...")
+		config := paircheck.golangciConfig(t, settingsOf(t, rules), nil)
+		code, stdout, stderr := paircheck.execute(t, nil, paircheck.command, "-c", config, "./...")
 		if code != exitFindings {
 			t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 		}
-		compare(t, findings(t, stdout, ""))
+		paircheck.compare(t, paircheck.findings(t, stdout, ""))
 	})
 }
 
@@ -70,12 +83,24 @@ func TestCommandFollowsRunTests(t *testing.T) {
 func TestCommandFlagWinsOverRunTests(t *testing.T) {
 	for _, test := range flagsOverRunTests {
 		t.Run(test.flag, func(t *testing.T) {
-			config := golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.run})
-			code, stdout, stderr := execute(t, nil, command, "-c", config, test.flag, "./...")
+			config := paircheck.golangciConfig(t, settingsOf(t, rules), map[string]any{"tests": test.run})
+			code, stdout, stderr := paircheck.execute(
+				t,
+				nil,
+				paircheck.command,
+				"-c",
+				config,
+				test.flag,
+				"./...",
+			)
 			if code != exitFindings {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 			}
-			compareWith(t, findings(t, stdout, ""), expected(t, test.analyzed, false))
+			compareWith(
+				t,
+				paircheck.findings(t, stdout, ""),
+				paircheck.expected(t, test.analyzed, false, generatedStrict),
+			)
 		})
 	}
 }
@@ -85,12 +110,24 @@ func TestCommandFlagWinsOverRunTests(t *testing.T) {
 func TestCommandSkipsAKeyAFlagReplaces(t *testing.T) {
 	for _, test := range flagsOverInvalidKeys {
 		t.Run(test.name, func(t *testing.T) {
-			config := golangciConfig(t, settingsOf(t, rules), test.run)
-			code, stdout, stderr := execute(t, nil, command, "-c", config, test.flag, "./...")
+			config := paircheck.golangciConfig(t, settingsOf(t, rules), test.run)
+			code, stdout, stderr := paircheck.execute(
+				t,
+				nil,
+				paircheck.command,
+				"-c",
+				config,
+				test.flag,
+				"./...",
+			)
 			if code != exitFindings {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 			}
-			compareWith(t, findings(t, stdout, ""), expected(t, test.analyzed, false))
+			compareWith(
+				t,
+				paircheck.findings(t, stdout, ""),
+				paircheck.expected(t, test.analyzed, false, generatedStrict),
+			)
 		})
 	}
 }
@@ -100,13 +137,21 @@ func TestCommandSkipsAKeyAFlagReplaces(t *testing.T) {
 func TestCommandFollowsBuildTags(t *testing.T) {
 	for _, test := range buildTags {
 		t.Run(test.name, func(t *testing.T) {
-			config := golangciConfig(t, settingsOf(t, rules), withBuildTags(test.run))
+			config := paircheck.golangciConfig(t, settingsOf(t, rules), withBuildTags(test.run))
 			arguments := append([]string{"-c", config}, test.flags...)
-			code, stdout, stderr := execute(t, nil, command, append(arguments, "./...")...)
+			code, stdout, stderr := paircheck.execute(
+				t,
+				nil,
+				paircheck.command,
+				append(arguments, "./...")...)
 			if code != exitFindings {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
 			}
-			compareWith(t, findings(t, stdout, ""), expected(t, true, test.tagged))
+			compareWith(
+				t,
+				paircheck.findings(t, stdout, ""),
+				paircheck.expected(t, true, test.tagged, generatedStrict),
+			)
 		})
 	}
 }
@@ -114,7 +159,14 @@ func TestCommandFollowsBuildTags(t *testing.T) {
 // TestCommandSkipsTestMain runs a rule only the generated test main could
 // bind.
 func TestCommandSkipsTestMain(t *testing.T) {
-	code, stdout, stderr := execute(t, nil, command, "-c", absolute(t, testMain), "./...")
+	code, stdout, stderr := paircheck.execute(
+		t,
+		nil,
+		paircheck.command,
+		"-c",
+		absolute(t, testMain),
+		"./...",
+	)
 	if code != exitClean || stdout != "" || stderr != "" {
 		t.Errorf(
 			"exit = %d, stdout = %q, stderr = %q, want %d and no output",
@@ -127,22 +179,34 @@ func TestCommandSkipsTestMain(t *testing.T) {
 }
 
 func TestCommandWithoutRules(t *testing.T) {
-	code, stdout, stderr := execute(t, nil, command, "-c", absolute(t, empty), "./...")
-	if code != exitClean || stdout != "" || stderr != "" {
-		t.Errorf(
-			"exit = %d, stdout = %q, stderr = %q, want %d and no output",
-			code,
-			stdout,
-			stderr,
-			exitClean,
-		)
+	for _, current := range linters() {
+		t.Run(current.name, func(t *testing.T) {
+			config := absolute(t, empty)
+			code, stdout, stderr := current.execute(t, nil, current.command, "-c", config, "./...")
+			if code != exitClean || stdout != "" || stderr != "" {
+				t.Errorf(
+					"exit = %d, stdout = %q, stderr = %q, want %d and no output",
+					code,
+					stdout,
+					stderr,
+					exitClean,
+				)
+			}
+		})
 	}
 }
 
 func TestCommandValidates(t *testing.T) {
 	for _, path := range []string{rules, "../paircheck.example.yml", "../golangci.example.yml"} {
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			code, _, stderr := execute(t, nil, command, "validate", "-c", absolute(t, path))
+			code, _, stderr := paircheck.execute(
+				t,
+				nil,
+				paircheck.command,
+				"validate",
+				"-c",
+				absolute(t, path),
+			)
 			if code != exitClean {
 				t.Errorf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
 			}
@@ -151,17 +215,17 @@ func TestCommandValidates(t *testing.T) {
 }
 
 func TestCommandRefuses(t *testing.T) {
-	for _, current := range refusals {
+	for _, current := range paircheck.refused {
 		t.Run(filepath.Base(current.file), func(t *testing.T) {
 			config := absolute(t, current.file)
-			code, stdout, stderr := execute(t, nil, command, "-c", config, "./...")
+			code, stdout, stderr := paircheck.execute(t, nil, paircheck.command, "-c", config, "./...")
 			if code != exitFailed {
 				t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFailed, stderr)
 			}
 			if strings.Count(stderr, current.want) != 1 || !refused(stderr, current) || stdout != "" {
 				t.Errorf("stdout = %q, stderr = %q, want %q once on stderr", stdout, stderr, current.want)
 			}
-			code, _, stderr = execute(t, nil, command, "validate", "-c", config)
+			code, _, stderr = paircheck.execute(t, nil, paircheck.command, "validate", "-c", config)
 			if code != exitFailed || !refused(stderr, current) {
 				t.Errorf(
 					"validate: exit = %d, stderr = %q, want %d and %q",
@@ -176,11 +240,62 @@ func TestCommandRefuses(t *testing.T) {
 }
 
 func TestCommandVersion(t *testing.T) {
-	code, stdout, stderr := execute(t, nil, command, "-v")
+	code, stdout, stderr := paircheck.execute(t, nil, paircheck.command, "-v")
 	if code != exitClean {
 		t.Fatalf("exit = %d, want %d; stderr: %s", code, exitClean, stderr)
 	}
 	if !regexp.MustCompile(`^(v\S+|\(devel\))\n$`).MatchString(stdout) {
 		t.Errorf("stdout = %q, want one version", stdout)
+	}
+}
+
+// TestCommandFollowsGenerated reads linters.exclusions.generated of a
+// golangci-lint configuration, and drops the findings in generated files as
+// golangci-lint does, for each analyzer.
+func TestCommandFollowsGenerated(t *testing.T) {
+	for _, current := range linters() {
+		for _, mode := range generatedModes {
+			t.Run(current.name+" "+mode, func(t *testing.T) {
+				config := current.golangciGenerated(t, settingsOf(t, current.rules), mode)
+				code, stdout, stderr := current.execute(t, nil, current.command, "-c", config, "./...")
+				if code != exitFindings {
+					t.Fatalf("exit = %d, want %d; stderr: %s", code, exitFindings, stderr)
+				}
+				compareWith(t, current.findings(t, stdout, ""), current.expected(t, true, false, mode))
+			})
+		}
+	}
+}
+
+func TestCommandDefcheckRefuses(t *testing.T) {
+	for _, current := range defcheck.refused {
+		t.Run(filepath.Base(current.file), func(t *testing.T) {
+			config := absolute(t, current.file)
+			code, stdout, stderr := defcheck.execute(t, nil, defcheck.command, "-c", config, "./...")
+			if code != exitFailed || stdout != "" || strings.Count(stderr, current.want) != 1 {
+				t.Errorf(
+					"exit = %d, stdout = %q, stderr = %q, want %d and %q once on stderr",
+					code,
+					stdout,
+					stderr,
+					exitFailed,
+					current.want,
+				)
+			}
+		})
+	}
+}
+
+// TestCommandDefcheckAcceptsExamples runs defcheck with each example of the
+// repository's root, which the command accepts.
+func TestCommandDefcheckAcceptsExamples(t *testing.T) {
+	for _, path := range []string{"../defcheck.example.yml", "../golangci.example.yml"} {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			config := absolute(t, path)
+			code, _, stderr := defcheck.execute(t, nil, defcheck.command, "-c", config, "./...")
+			if code == exitFailed || stderr != "" {
+				t.Errorf("exit = %d, stderr = %q, want the example accepted", code, stderr)
+			}
+		})
 	}
 }

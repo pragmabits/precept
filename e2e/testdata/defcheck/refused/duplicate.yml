@@ -1,0 +1,7 @@
+# Two rules with the same pattern, kinds and message: the order and the
+# repetition of the kinds do not tell them apart.
+rules:
+  - pattern: '^cfg$'
+    kinds: [local-var, parameter]
+  - pattern: '^cfg$'
+    kinds: [parameter, local-var, parameter]

@@ -1,0 +1,3 @@
+# A pattern that does not compile.
+rules:
+  - pattern: '(cfg'
