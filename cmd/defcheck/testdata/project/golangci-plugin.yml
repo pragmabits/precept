@@ -1,0 +1,11 @@
+version: "2"
+linters:
+  settings:
+    custom:
+      defcheck:
+        type: module
+        settings:
+          rules:
+            - pattern: ^cfg$
+              kinds: [package-var, local-var]
+              message: avoid the cfg abbreviation

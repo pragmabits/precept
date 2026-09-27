@@ -1,0 +1,4 @@
+rules:
+  - pattern: ^cfg$
+    kinds: [package-var, local-var]
+    message: avoid the cfg abbreviation
