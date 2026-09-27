@@ -8,11 +8,13 @@ import (
 	"github.com/golangci/plugin-module-register/register"
 	"golang.org/x/tools/go/analysis"
 
+	"github.com/pragmabits/precept/defcheck"
 	"github.com/pragmabits/precept/paircheck"
 )
 
 func init() {
 	register.Plugin("paircheck", newPaircheck)
+	register.Plugin("defcheck", newDefcheck)
 }
 
 // linter is an analyzer built from its plugin settings.
@@ -34,13 +36,28 @@ func newPaircheck(settings any) (register.LinterPlugin, error) {
 	return linter{analyzers: []*analysis.Analyzer{analyzer}}, nil
 }
 
+// newDefcheck builds defcheck from the settings golangci-lint hands over, and
+// refuses them before any package is analyzed.
+func newDefcheck(settings any) (register.LinterPlugin, error) {
+	config, err := register.DecodeSettings[defcheck.Config](settings)
+	if err != nil {
+		return nil, err
+	}
+	analyzer, err := defcheck.New(config)
+	if err != nil {
+		return nil, err
+	}
+	return linter{analyzers: []*analysis.Analyzer{analyzer}}, nil
+}
+
 // BuildAnalyzers returns the analyzer built from the settings.
 func (l linter) BuildAnalyzers() ([]*analysis.Analyzer, error) {
 	return l.analyzers, nil
 }
 
-// GetLoadMode asks for type information: a rule is bound to its functions
-// through their types.
+// GetLoadMode asks for type information: a paircheck rule is bound to its
+// functions through their types, and defcheck reads the kind of a declaration
+// from the object go/types gives it.
 func (l linter) GetLoadMode() string {
 	return register.LoadModeTypesInfo
 }

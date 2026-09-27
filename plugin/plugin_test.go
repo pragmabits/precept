@@ -59,3 +59,50 @@ func TestRefusesInvalidSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestRegistersDefcheck(t *testing.T) {
+	constructor, err := register.GetPlugin("defcheck")
+	if err != nil {
+		t.Fatalf("GetPlugin: %v", err)
+	}
+	linter, err := constructor(map[string]any{
+		"rules": []any{map[string]any{
+			"pattern": "^cfg$",
+			"kinds":   []any{"local-var", "parameter", "field"},
+			"message": "avoid the cfg abbreviation",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("constructor: %v", err)
+	}
+	analyzers, err := linter.BuildAnalyzers()
+	if err != nil {
+		t.Fatalf("BuildAnalyzers: %v", err)
+	}
+	if len(analyzers) != 1 || analyzers[0].Name != "defcheck" {
+		t.Errorf("BuildAnalyzers() = %v, want the defcheck analyzer alone", analyzers)
+	}
+	if mode := linter.GetLoadMode(); mode != register.LoadModeTypesInfo {
+		t.Errorf("GetLoadMode() = %q, want %q", mode, register.LoadModeTypesInfo)
+	}
+}
+
+func TestRefusesInvalidDefcheckSettings(t *testing.T) {
+	constructor, err := register.GetPlugin("defcheck")
+	if err != nil {
+		t.Fatalf("GetPlugin: %v", err)
+	}
+	rules := map[string]map[string]any{
+		"invalid pattern": {"pattern": "(cfg"},
+		"unknown kind":    {"pattern": "cfg", "kinds": []any{"variable"}},
+		"unknown key":     {"pattern": "cfg", "kind": "field"},
+		"kinds as text":   {"pattern": "cfg", "kinds": "field"},
+	}
+	for defect, current := range rules {
+		t.Run(defect, func(t *testing.T) {
+			if _, err := constructor(map[string]any{"rules": []any{current}}); err == nil {
+				t.Errorf("constructor error = nil, want an error")
+			}
+		})
+	}
+}
