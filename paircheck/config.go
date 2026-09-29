@@ -19,6 +19,8 @@ var (
 	ErrUnknownCoverage = errors.New(`deferred-closure is not "any-path", "every-path" or "none"`)
 	ErrUnknownTransfer = errors.New(`transfer is not "all", "none" or an object`)
 	ErrCallSlot        = errors.New("the call satisfier takes no slot")
+	ErrNoType          = errors.New("implementation has no name")
+	ErrInvalidType     = errors.New("name is not a qualified type name")
 )
 
 // callSatisfier is the satisfier that calls the value itself, when the value is
@@ -67,6 +69,47 @@ func (c *Call) UnmarshalJSON(data []byte) error {
 // UnmarshalText takes the name alone, and leaves the slot to deduction.
 func (c *Call) UnmarshalText(text []byte) error {
 	c.Name = string(text)
+	return nil
+}
+
+// Implementation is a concrete type a rule written on an interface applies to
+// as well, with the methods of the type in place of those of the interfaces it
+// implements, and the id its findings carry: the rule's when it names none. In
+// a configuration it is written either as the name of the type alone, as
+// example.com/project/session.Store, or as an object.
+type Implementation struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+}
+
+// compile is the implementation of the rule whose id is rule: a type name, as
+// types.TypeName spells it with its package's path, the pointer and the type
+// parameters left out.
+func (i Implementation) compile(rule string) (implementation, error) {
+	if i.Name == "" {
+		return implementation{}, ErrNoType
+	}
+	written := withoutTypeParameters(strings.TrimPrefix(i.Name, "*"))
+	name, err := parseName(written)
+	if err != nil || strings.HasPrefix(written, "(") {
+		return implementation{}, fmt.Errorf("%w: %q", ErrInvalidType, i.Name)
+	}
+	id := strings.TrimSpace(i.ID)
+	if id == "" {
+		id = rule
+	}
+	return implementation{name: name, id: id}, nil
+}
+
+// UnmarshalJSON takes the name alone or the object.
+func (i *Implementation) UnmarshalJSON(data []byte) error {
+	type plain Implementation
+	return decodeTextOrObject(data, i.UnmarshalText, (*plain)(i), ErrInvalidType)
+}
+
+// UnmarshalText takes the name alone, and leaves the id to the rule.
+func (i *Implementation) UnmarshalText(text []byte) error {
+	i.Name = string(text)
 	return nil
 }
 
@@ -165,6 +208,10 @@ type Rule struct {
 	// satisfier called on the path: a deferred one alone does not say how the
 	// obligation ends when the function succeeds.
 	OnSuccess bool `json:"on-success"`
+
+	// Implementations are the concrete types the rule applies to as well, when
+	// it is written on an interface.
+	Implementations []Implementation `json:"implementations"`
 }
 
 func (r Rule) compile() (protocol, error) {
@@ -187,17 +234,26 @@ func (r Rule) compile() (protocol, error) {
 	if err != nil {
 		return protocol{}, fmt.Errorf("%q: %w", id, err)
 	}
+	implementations := make([]implementation, 0, len(r.Implementations))
+	for index, each := range r.Implementations {
+		compiled, err := each.compile(id)
+		if err != nil {
+			return protocol{}, fmt.Errorf("%q: implementation %d: %w", id, index, err)
+		}
+		implementations = append(implementations, compiled)
+	}
 	return protocol{
-		id:           id,
-		trigger:      trigger,
-		satisfiers:   satisfiers,
-		openOnError:  r.OpenOnError,
-		coverage:     coverage,
-		escapes:      r.Transfer.compile(),
-		requireDefer: r.RequireDefer,
-		idempotent:   r.Idempotent,
-		deferFirst:   r.DeferFirst,
-		onSuccess:    r.OnSuccess,
+		id:              id,
+		trigger:         trigger,
+		satisfiers:      satisfiers,
+		openOnError:     r.OpenOnError,
+		coverage:        coverage,
+		escapes:         r.Transfer.compile(),
+		requireDefer:    r.RequireDefer,
+		idempotent:      r.Idempotent,
+		deferFirst:      r.DeferFirst,
+		onSuccess:       r.OnSuccess,
+		implementations: implementations,
 	}, nil
 }
 
@@ -243,16 +299,33 @@ func (c Config) compile() ([]protocol, error) {
 		if err != nil {
 			return nil, fmt.Errorf("rule %d: %w", index, err)
 		}
-		if taken[compiled.id] {
-			return nil, fmt.Errorf("rule %d: %w: %q", index, ErrDuplicateID, compiled.id)
+		if err := claim(taken, compiled.id); err != nil {
+			return nil, fmt.Errorf("rule %d: %w", index, err)
 		}
-		taken[compiled.id] = true
+		for _, each := range rule.Implementations {
+			if err := claim(taken, strings.TrimSpace(each.ID)); err != nil {
+				return nil, fmt.Errorf("rule %d: %s: %w", index, each.Name, err)
+			}
+		}
 		if compiled.onSuccess {
 			compiled.failures = failures
 		}
 		protocols = append(protocols, compiled)
 	}
 	return protocols, nil
+}
+
+// claim takes id, which no rule and no implementation may take twice. An empty
+// id is an implementation's that takes its rule's.
+func claim(taken map[string]bool, id string) error {
+	if id == "" {
+		return nil
+	}
+	if taken[id] {
+		return fmt.Errorf("%w: %q", ErrDuplicateID, id)
+	}
+	taken[id] = true
+	return nil
 }
 
 func (c Config) compileFailures() ([]qualifiedName, error) {

@@ -119,3 +119,7 @@ func Quit() { os.Exit(3) }
 // Wrap adds context to an error that is not nil, as an error helper of a
 // project would.
 func Wrap(err error) error { return err }
+
+// Failure builds an error that is not nil, as an error package of a project
+// would, and no configuration lists it.
+func Failure(text string) error { return errors.New(text) }

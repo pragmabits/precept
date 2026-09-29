@@ -35,6 +35,16 @@ func TestMatching(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), analyzer, "matching")
 }
 
+func TestImplementations(t *testing.T) {
+	opener := rule("opener", "(resource.Opener).Open", "(resource.Opener).Close")
+	opener.Implementations = []paircheck.Implementation{
+		{Name: "resource.File"},
+		{Name: "handle.Handle", ID: "handle"},
+	}
+	analyzer := build(t, opener)
+	analysistest.Run(t, analysistest.TestData(), analyzer, "implementations", "elsewhere")
+}
+
 func TestShapes(t *testing.T) {
 	swap := rule("swap", "(*resource.Cache).Swap", "(*resource.Cache).Put")
 	swap.Trigger.Slot = "result 0"
@@ -91,12 +101,26 @@ func TestUnboundRuleFails(t *testing.T) {
 			rule:   written(rule("shapes", "resource.HoldAll", "resource.Unlock")),
 			want:   `rule "shapes": ` + paircheck.ErrNoLinkingType.Error(),
 		},
+		{
+			defect: "no such implementation",
+			rule:   implemented("resource.Missing"),
+			want: `rule "opener": implementation resource.Missing: ` +
+				paircheck.ErrUnknownType.Error(),
+		},
+		{
+			defect: "implementation of no interface of the rule",
+			rule:   implemented("resource.Conn"),
+			want: `rule "opener": implementation resource.Conn: ` +
+				paircheck.ErrImplementsNone.Error(),
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.defect, func(t *testing.T) {
 			var reported recorder
 			analyzer := build(t, test.rule)
-			analysistest.Run(&reported, analysistest.TestData(), analyzer, "ambiguous")
+			// A rule fails in the first package that sees all it names, which
+			// with facts is the one declaring them, before any that imports it.
+			analysistest.Run(&reported, analysistest.TestData(), analyzer, "resource")
 			if len(reported.errors) != 1 || !strings.HasSuffix(reported.errors[0], test.want) {
 				t.Errorf("errors = %q, want one ending in %q", reported.errors, test.want)
 			}
@@ -141,17 +165,21 @@ func TestRelativeNames(t *testing.T) {
 	analysistest.Run(t, filepath.Join(analysistest.TestData(), "module"), analyzer, "./...")
 }
 
-func TestRelativeNameOutsideAModuleFails(t *testing.T) {
+func TestRelativeNameOutsideAModuleIsLeftOut(t *testing.T) {
 	var reported recorder
 	analyzer := build(
 		t,
 		rule("resource", "(*./resource.Resource).Open", "(*./resource.Resource).Close"),
 	)
 	analysistest.Run(&reported, analysistest.TestData(), analyzer, "ambiguous")
-	want := `rule "resource": (./resource.Resource).Open: ` + paircheck.ErrNoModule.Error()
-	if len(reported.errors) != 1 || !strings.HasSuffix(reported.errors[0], want) {
-		t.Errorf("errors = %q, want one ending in %q", reported.errors, want)
+	if len(reported.errors) != 0 {
+		t.Errorf("errors = %q, want none", reported.errors)
 	}
+}
+
+func TestSummaries(t *testing.T) {
+	analyzer := build(t, rule("dial", "resource.Dial", "(*resource.Conn).Close"))
+	analysistest.Run(t, analysistest.TestData(), analyzer, "summaries")
 }
 
 func TestInvisibleSatisfier(t *testing.T) {
@@ -251,6 +279,20 @@ func TestFunctionValue(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), analyzer, "funcvalue")
 }
 
+func TestStoredFunctionValue(t *testing.T) {
+	disabled := false
+	dial := rule("dial", "resource.Dial", "(*resource.Conn).Close")
+	dial.Transfer = paircheck.Transfer{Store: &disabled}
+	analysistest.Run(t, analysistest.TestData(), build(t, dial), "storedvalue")
+}
+
+func TestHandedFunctionValue(t *testing.T) {
+	disabled := false
+	acquire := rule("acquire", "(*resource.Semaphore).Acquire", "call")
+	acquire.Transfer = paircheck.Transfer{Argument: &disabled}
+	analysistest.Run(t, analysistest.TestData(), build(t, acquire), "handedvalue")
+}
+
 func TestDeferFirst(t *testing.T) {
 	rules := []paircheck.Rule{
 		rule("transaction", "(*resource.DB).Begin", "(*resource.Tx).Commit", "(*resource.Tx).Rollback"),
@@ -309,6 +351,13 @@ func written(current paircheck.Rule) paircheck.Rule {
 	current.Trigger.Slot = "argument 0"
 	current.Satisfiers[0].Slot = "argument 0"
 	return current
+}
+
+// implemented is the rule on resource.Opener, applied to the type named too.
+func implemented(name string) paircheck.Rule {
+	opener := rule("opener", "(resource.Opener).Open", "(resource.Opener).Close")
+	opener.Implementations = []paircheck.Implementation{{Name: name}}
+	return opener
 }
 
 // recorder keeps what analysistest reports, for a case that expects the

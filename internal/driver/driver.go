@@ -81,16 +81,37 @@ func Analyze[T any](
 
 // rootErrors joins the distinct errors of the analyzed packages. An analyzer
 // may fail every package alike, as paircheck fails every package that sees
-// the functions of a rule it cannot bind, with the same message.
+// the functions of a rule it cannot bind, with the same message. A package
+// whose analysis waited on a dependency that failed carries that failure, as
+// golangci-lint reports it, not the name of the dependency the checker gives.
 func rootErrors(graph *checker.Graph) error {
 	var problems []error
 	seen := make(map[string]bool)
 	for _, root := range graph.Roots {
-		if root.Err == nil || seen[root.Err.Error()] {
+		if root.Err == nil {
 			continue
 		}
-		seen[root.Err.Error()] = true
-		problems = append(problems, root.Err)
+		for _, problem := range causes(root) {
+			if !seen[problem.Error()] {
+				seen[problem.Error()] = true
+				problems = append(problems, problem)
+			}
+		}
 	}
 	return errors.Join(problems...)
+}
+
+// causes are the errors action failed with: its own, or, when a dependency
+// failed first and the checker did not run it, those of the dependency.
+func causes(action *checker.Action) []error {
+	var found []error
+	for _, dependency := range action.Deps {
+		if dependency.Err != nil {
+			found = append(found, causes(dependency)...)
+		}
+	}
+	if len(found) == 0 {
+		return []error{action.Err}
+	}
+	return found
 }

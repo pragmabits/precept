@@ -109,7 +109,88 @@ func (c closure) satisfies(instruction ssa.Instruction) bool {
 		return true
 	}
 	inside := c.translate(pathOf(value))
-	return current.comparePaths(inside, pathOf(c.search.opened.value)) != sameNo
+	return current.satisfied(index, inside, pathOf(c.search.opened.value)) != sameNo
+}
+
+// decides reports whether the closure calls a satisfier on every path where
+// the error its function returns is not a failure: result, the variable that
+// error is read from, is what a check in the closure reads through a free
+// variable. A path that finds it not nil needs no call, and a path that ends in
+// a panic is abandoned.
+func (c closure) decides(result ssa.Value) bool {
+	if len(c.function.Blocks) == 0 {
+		return false
+	}
+	captured := c.capturing(result)
+	type point struct {
+		block  *ssa.BasicBlock
+		failed bool
+	}
+	pending := []point{{block: c.function.Blocks[0]}}
+	visited := make(map[point]bool)
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if visited[current] {
+			continue
+		}
+		visited[current] = true
+		covered, leaves := c.scan(current.block)
+		switch {
+		case covered, current.failed && leaves:
+			continue
+		case leaves:
+			if _, panics := current.block.Instrs[len(current.block.Instrs)-1].(*ssa.Panic); !panics {
+				return false
+			}
+			continue
+		}
+		for position, successor := range current.block.Succs {
+			pending = append(pending, point{
+				block:  successor,
+				failed: c.failsAlong(current.block, position, captured, current.failed),
+			})
+		}
+	}
+	return true
+}
+
+// capturing is the free variable of the closure bound to variable, or nil.
+func (c closure) capturing(variable ssa.Value) ssa.Value {
+	if variable == nil {
+		return nil
+	}
+	index := slices.Index(c.bindings, variable)
+	if index < 0 || index >= len(c.function.FreeVars) {
+		return nil
+	}
+	return c.function.FreeVars[index]
+}
+
+// failsAlong is whether the error the function returns is known to be a failure
+// on the successor at position of block: a check of it there says so, or says it
+// is nil; any other branch keeps what was known.
+func (c closure) failsAlong(
+	block *ssa.BasicBlock,
+	position int,
+	captured ssa.Value,
+	failed bool,
+) bool {
+	branch, ok := block.Instrs[len(block.Instrs)-1].(*ssa.If)
+	if !ok || captured == nil {
+		return failed
+	}
+	found, ok := c.search.proofOf(branch.Cond)
+	if !ok {
+		return failed
+	}
+	if variable, read := variableRead(found.checked); !read || variable != captured {
+		return failed
+	}
+	if position == found.failing {
+		return true
+	}
+	return failed && !found.nilOtherwise
 }
 
 // translate is reached as seen from the function that defers the closure: a

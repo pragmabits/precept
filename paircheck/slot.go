@@ -2,6 +2,7 @@ package paircheck
 
 import (
 	"fmt"
+	"go/token"
 	"go/types"
 	"strconv"
 	"strings"
@@ -74,6 +75,10 @@ func receiverOf(common *ssa.CallCommon) ssa.Value {
 	if receiver, ok := boundReceiver(common.Value); ok {
 		return receiver
 	}
+	if methods, all := keptMethods(common.Value); all && len(methods) == 1 {
+		receiver, _ := boundReceiver(methods[0])
+		return receiver
+	}
 	if common.Signature().Recv() == nil || len(common.Args) == 0 {
 		return nil
 	}
@@ -93,6 +98,112 @@ func boundReceiver(value ssa.Value) (ssa.Value, bool) {
 	}
 	method, ok := function.Object().(*types.Func)
 	return closure.Bindings[0], ok && method.Signature().Recv() != nil
+}
+
+// keptMethods are the method values a function value read back from memory may
+// be: those its function stored where the value may be read from, a field or a
+// map entry. They are all it can be when every such store holds a method value
+// and comes before the read in its block, with no call between that could
+// store another.
+func keptMethods(value ssa.Value) ([]*ssa.MakeClosure, bool) {
+	read, ok := value.(ssa.Instruction)
+	if !ok || !readBack(value) {
+		return nil, false
+	}
+	stores, kept := storedWhere(value, read.Parent())
+	var methods []*ssa.MakeClosure
+	all := len(stores) > 0
+	for index, store := range stores {
+		closure, bound := boundMethod(kept[index])
+		if bound {
+			methods = append(methods, closure)
+		}
+		all = all && bound && precedes(store, read)
+	}
+	return methods, all
+}
+
+// storedWhere lists the stores of function into the places value may be read
+// from, and what each one stores.
+func storedWhere(value ssa.Value, function *ssa.Function) ([]ssa.Instruction, []ssa.Value) {
+	var stores []ssa.Instruction
+	var kept []ssa.Value
+	for _, block := range function.Blocks {
+		for _, instruction := range block.Instrs {
+			stored, same := keptAt(value, instruction)
+			if stored != nil && same != sameNo {
+				stores = append(stores, instruction)
+				kept = append(kept, stored)
+			}
+		}
+	}
+	return stores, kept
+}
+
+// precedes reports whether store comes before read in the block of read, with
+// no call between.
+func precedes(store, read ssa.Instruction) bool {
+	if store.Block() != read.Block() {
+		return false
+	}
+	stored := false
+	for _, instruction := range read.Block().Instrs {
+		switch instruction.(type) {
+		case *ssa.Call, *ssa.Go, *ssa.RunDefers:
+			if stored && instruction != read {
+				return false
+			}
+		}
+		if instruction == store {
+			stored = true
+		}
+		if instruction == read {
+			return stored
+		}
+	}
+	return false
+}
+
+// boundMethod is value when it is a method value.
+func boundMethod(value ssa.Value) (*ssa.MakeClosure, bool) {
+	closure, ok := value.(*ssa.MakeClosure)
+	if !ok {
+		return nil, false
+	}
+	_, bound := boundReceiver(closure)
+	return closure, bound
+}
+
+// readBack reports whether value is read from memory: a load, or an entry of a
+// map.
+func readBack(value ssa.Value) bool {
+	switch read := value.(type) {
+	case *ssa.UnOp:
+		return read.Op == token.MUL
+	case *ssa.Lookup:
+		return !read.CommaOk
+	}
+	return false
+}
+
+// keptAt is the value instruction stores where value is read from, a field or
+// a map entry, and whether that is the same place.
+func keptAt(value ssa.Value, instruction ssa.Instruction) (ssa.Value, sameness) {
+	switch read := value.(type) {
+	case *ssa.UnOp:
+		store, ok := instruction.(*ssa.Store)
+		if !ok {
+			return nil, sameNo
+		}
+		return store.Val, sameLocation(read.X, store.Addr)
+	case *ssa.Lookup:
+		update, ok := instruction.(*ssa.MapUpdate)
+		if !ok {
+			return nil, sameNo
+		}
+		return update.Value, sameEntry(read, update)
+	}
+	return nil, sameNo
 }
 
 func argumentOf(common *ssa.CallCommon, index int) ssa.Value {

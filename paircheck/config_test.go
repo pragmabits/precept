@@ -388,6 +388,29 @@ func TestPackagesListsFailures(t *testing.T) {
 	}
 }
 
+func TestPackagesListsImplementations(t *testing.T) {
+	opener := rule("opener", "(./session.Store).Open", "(./session.Store).Close")
+	opener.Implementations = []paircheck.Implementation{
+		{Name: "./session/redis.Store"},
+		{Name: "*example.com/memory.Store"},
+	}
+	got, err := paircheck.Packages(
+		paircheck.Config{Rules: []paircheck.Rule{opener}},
+		"example.com/project",
+	)
+	if err != nil {
+		t.Fatalf("Packages: %v", err)
+	}
+	want := []string{
+		"example.com/memory",
+		"example.com/project/session",
+		"example.com/project/session/redis",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("Packages() = %v, want %v", got, want)
+	}
+}
+
 func TestPackagesRefusesRelativeNamesOutsideAModule(t *testing.T) {
 	config := paircheck.Config{Rules: []paircheck.Rule{
 		rule("resource", "(*./resource.Resource).Open", "(*./resource.Resource).Close"),
@@ -402,4 +425,131 @@ func valid() paircheck.Config {
 		rule("resource", "(*resource.Resource).Open", "(*resource.Resource).Close"),
 		rule("transaction", "(*resource.Resource).Begin", "(*resource.Resource).Commit"),
 	}}
+}
+
+func TestImplementationDecodesBothForms(t *testing.T) {
+	const document = `{
+		"id": "opener",
+		"trigger": "(resource.Opener).Open",
+		"satisfiers": ["(resource.Opener).Close"],
+		"implementations": ["resource.File", {"name": "handle.Handle", "id": "handle"}]
+	}`
+	var decoded paircheck.Rule
+	if err := json.Unmarshal([]byte(document), &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	want := []paircheck.Implementation{
+		{Name: "resource.File"},
+		{Name: "handle.Handle", ID: "handle"},
+	}
+	if len(decoded.Implementations) != len(want) {
+		t.Fatalf("implementations = %v, want %v", decoded.Implementations, want)
+	}
+	for index := range want {
+		if decoded.Implementations[index] != want[index] {
+			t.Errorf(
+				"implementation %d = %v, want %v",
+				index,
+				decoded.Implementations[index],
+				want[index],
+			)
+		}
+	}
+}
+
+func TestImplementationRefusesOtherForms(t *testing.T) {
+	documents := []string{`[]`, `true`, `{"name": "resource.File", "slot": "receiver"}`}
+	for _, document := range documents {
+		var decoded paircheck.Implementation
+		if err := json.Unmarshal([]byte(document), &decoded); err == nil {
+			t.Errorf("Unmarshal(%s) = nil, want an error", document)
+		}
+	}
+}
+
+func TestNewRefusesInvalidImplementations(t *testing.T) {
+	tests := []struct {
+		defect string
+		want   error
+		change func(config *paircheck.Config)
+	}{
+		{
+			defect: "no name",
+			want:   paircheck.ErrNoType,
+			change: func(config *paircheck.Config) {
+				config.Rules[0].Implementations = []paircheck.Implementation{{ID: "file"}}
+			},
+		},
+		{
+			defect: "a method",
+			want:   paircheck.ErrInvalidType,
+			change: func(config *paircheck.Config) {
+				config.Rules[0].Implementations = []paircheck.Implementation{
+					{Name: "(resource.File).Open"},
+				}
+			},
+		},
+		{
+			defect: "no package",
+			want:   paircheck.ErrInvalidType,
+			change: func(config *paircheck.Config) {
+				config.Rules[0].Implementations = []paircheck.Implementation{{Name: "File"}}
+			},
+		},
+		{
+			defect: "id of another rule",
+			want:   paircheck.ErrDuplicateID,
+			change: func(config *paircheck.Config) {
+				config.Rules[0].Implementations = []paircheck.Implementation{
+					{Name: "resource.File", ID: config.Rules[1].ID},
+				}
+			},
+		},
+		{
+			defect: "id of its own rule",
+			want:   paircheck.ErrDuplicateID,
+			change: func(config *paircheck.Config) {
+				config.Rules[0].Implementations = []paircheck.Implementation{
+					{Name: "resource.File", ID: config.Rules[0].ID},
+				}
+			},
+		},
+		{
+			defect: "id of another implementation",
+			want:   paircheck.ErrDuplicateID,
+			change: func(config *paircheck.Config) {
+				config.Rules[0].Implementations = []paircheck.Implementation{
+					{Name: "resource.File", ID: "file"},
+					{Name: "handle.Handle", ID: "file"},
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.defect, func(t *testing.T) {
+			config := valid()
+			test.change(&config)
+			_, err := paircheck.New(config)
+			if !errors.Is(err, test.want) {
+				t.Errorf("New() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestNewAcceptsEveryTypeSpelling(t *testing.T) {
+	spellings := []string{
+		"resource.File",
+		"*resource.File",
+		"example.com/project/resource.Pool[T]",
+		"./internal/handle.Handle",
+		"..Handle",
+	}
+	for _, spelling := range spellings {
+		config := valid()
+		config.Rules[0].Implementations = []paircheck.Implementation{{Name: spelling}}
+		if _, err := paircheck.New(config); err != nil {
+			t.Errorf("New() with %q error = %v, want nil", spelling, err)
+		}
+	}
 }

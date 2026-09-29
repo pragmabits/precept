@@ -30,6 +30,7 @@ func Validate(config Config, module string, loaded []*types.Package) error {
 		if _, err := resolve(current, visible, true); err != nil {
 			problems = append(problems, fmt.Errorf("rule %q: %w", current.id, err))
 		}
+		problems = append(problems, implementationProblems(current, visible)...)
 	}
 	failures, err := failuresWithin(config, module)
 	if err != nil {
@@ -61,6 +62,9 @@ func Packages(config Config, module string) ([]string, error) {
 			if !satisfier.called {
 				paths = append(paths, satisfier.name.path)
 			}
+		}
+		for _, each := range current.implementations {
+			paths = append(paths, each.name.path)
 		}
 	}
 	for _, name := range failures {

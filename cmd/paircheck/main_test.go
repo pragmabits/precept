@@ -156,6 +156,36 @@ func TestAnalyzeRefusesUnboundRule(t *testing.T) {
 	}
 }
 
+func TestAnalyzeReportsTheErrorOfADependency(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project"))
+	config := write(t, `rules:
+  - id: swap
+    trigger: (*example.com/project/resource.Cache).Swap
+    satisfiers: [(*example.com/project/resource.Cache).Put]
+`)
+	code, _, stderr := execute("--config", config, "./leak")
+	if code != driver.ExitFailed {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFailed, stderr)
+	}
+	want := `rule "swap": more than one slot`
+	if strings.Count(stderr, want) != 1 || strings.Contains(stderr, "failed prerequisites") {
+		t.Errorf("stderr = %q, want %q once, and no failed prerequisites", stderr, want)
+	}
+}
+
+func TestAnalyzeLeavesRelativeNamesOutOfDependencies(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "dependent"))
+	config := write(t, `rules:
+  - id: store
+    trigger: (*./store.Store).Begin
+    satisfiers: [(*./store.Store).End]
+`)
+	code, stdout, stderr := execute("--config", config, "./...")
+	if code != driver.ExitClean {
+		t.Errorf("exit = %d, want %d; stdout: %s; stderr: %s", code, driver.ExitClean, stdout, stderr)
+	}
+}
+
 func TestAnalyzePrintsLoadErrorsOnce(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "broken"))
 	code, _, stderr := execute("--config", write(t, "rules: []\n"), "./...")
@@ -558,6 +588,20 @@ func TestRequiresConfig(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsImplementations(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "project"))
+	config := write(t, `rules:
+  - id: opener
+    trigger: (./resource.Opener).Open
+    satisfiers: [(./resource.Opener).Close]
+    implementations: [./resource.Resource]
+`)
+	code, _, stderr := execute("validate", "--config", config)
+	if code != driver.ExitClean {
+		t.Errorf("exit = %d, want %d; stderr: %s", code, driver.ExitClean, stderr)
+	}
+}
+
 func TestValidateAfterFlags(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "project"))
 	code, _, stderr := execute("--config", "rules.yml", "validate")
@@ -695,6 +739,34 @@ func TestValidateRefuses(t *testing.T) {
 			rule: `trigger: (*example.com/project/resource.Cache).Swap
     satisfiers: [(*example.com/project/resource.Cache).Put]`,
 			want: "more than one slot",
+		},
+		{
+			defect: "no such implementation",
+			rule: `trigger: (example.com/project/resource.Opener).Open
+    satisfiers: [(example.com/project/resource.Opener).Close]
+    implementations: [example.com/project/resource.Missing]`,
+			want: "implementation example.com/project/resource.Missing: no such type",
+		},
+		{
+			defect: "implementation in a missing package",
+			rule: `trigger: (example.com/project/resource.Opener).Open
+    satisfiers: [(example.com/project/resource.Opener).Close]
+    implementations: [example.com/project/missing.Store]`,
+			want: "implementation example.com/project/missing.Store: no such type",
+		},
+		{
+			defect: "implementation of no interface",
+			rule: `trigger: (example.com/project/resource.Opener).Open
+    satisfiers: [(example.com/project/resource.Opener).Close]
+    implementations: [example.com/project/resource.Cache]`,
+			want: "implements no interface the rule names",
+		},
+		{
+			defect: "implementation with a method of another receiver",
+			rule: `trigger: (example.com/project/resource.Pool).Acquire
+    satisfiers: [(example.com/project/resource.Recycler).Release]
+    implementations: [example.com/project/resource.SQLPool]`,
+			want: "has a method of the rule on a receiver it does not implement",
 		},
 	}
 	for _, test := range tests {

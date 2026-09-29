@@ -31,9 +31,11 @@ type candidate struct {
 }
 
 // binding is a protocol resolved in one pass: the slot carrying the value on
-// each side, deduced from the types of the functions the pass can see, and the
-// result through which the trigger reports failure. A satisfier the pass
-// cannot see keeps the zero slot; the pass cannot call it.
+// each side, deduced from the types of the functions the pass can see, the
+// result through which the trigger reports failure, and, under on-success,
+// what the pass knows of failures. A satisfier the pass cannot see keeps the
+// zero slot; the pass cannot call it. Stored holds, once found, the method
+// values each function value read back from memory may be.
 type binding struct {
 	protocol       protocol
 	valueType      types.Type
@@ -41,6 +43,9 @@ type binding struct {
 	satisfierSlots []slot
 	satisfiers     []*types.Func
 	failure        int
+	failures       failures
+	stored         map[ssa.Value][]*ssa.MakeClosure
+	summaries      *summaries
 }
 
 // bind resolves current against the packages visible from a pass. A pass that
@@ -56,7 +61,7 @@ func bind(current protocol, visible map[string]*types.Package) (binding, bool, e
 	if !seesAll(visible, current) {
 		return binding{}, false, nil
 	}
-	return binding{}, false, fmt.Errorf("rule %q: %w", current.id, err)
+	return binding{}, false, fmt.Errorf("rule %s: %w", current.described(), err)
 }
 
 // seesAll reports whether every function current names is in the visible
@@ -201,6 +206,9 @@ func (b binding) satisfierOf(common *ssa.CallCommon) (int, bool) {
 	if index, ok := b.calledBy(common); ok {
 		return index, true
 	}
+	if index, ok := b.keptSatisfier(common); ok {
+		return index, true
+	}
 	if !common.IsInvoke() {
 		return 0, false
 	}
@@ -230,6 +238,35 @@ func (b binding) calledBy(common *ssa.CallCommon) (int, bool) {
 		return current.called
 	})
 	return index, index >= 0
+}
+
+// keptSatisfier reports which satisfier common calls when it calls a method
+// value of one, read back from where its function stored it.
+func (b binding) keptSatisfier(common *ssa.CallCommon) (int, bool) {
+	if common.IsInvoke() || common.StaticCallee() != nil {
+		return 0, false
+	}
+	methods, found := b.stored[common.Value]
+	if !found {
+		methods, _ = keptMethods(common.Value)
+		if b.stored != nil {
+			b.stored[common.Value] = methods
+		}
+	}
+	for _, method := range methods {
+		function, ok := method.Fn.(*ssa.Function)
+		if !ok {
+			continue
+		}
+		object, ok := function.Object().(*types.Func)
+		if !ok {
+			continue
+		}
+		if index, named := b.protocol.satisfierNamed(object); named {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 func isFunction(valueType types.Type) bool {

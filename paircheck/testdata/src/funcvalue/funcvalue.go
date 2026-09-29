@@ -76,3 +76,37 @@ func methodValuePassed() {
 }
 
 func register(close func() error) {}
+
+// A function the trigger returned is not one the function received.
+
+func callsParameter(s *resource.Semaphore, next func()) {
+	release := s.Acquire() // want `\[acquire\] Acquire requires a call on release before function exit`
+	defer next()
+	_ = release
+}
+
+func callsParameterInClosure(s *resource.Semaphore, next func()) {
+	release := s.Acquire() // want `\[acquire\] Acquire requires a call on release before function exit`
+	defer func() {
+		next()
+	}()
+	_ = release
+}
+
+// callsReassigned calls a variable that holds, by then, the function Acquire
+// returned.
+func callsReassigned(s *resource.Semaphore, next func()) {
+	release := s.Acquire()
+	defer func() {
+		next()
+	}()
+	next = release
+}
+
+// closesParameter closes a connection it received, which may be the one Dial
+// returned: only under the call satisfier is the trigger's result taken as new.
+func closesParameter(other *resource.Conn) {
+	conn := resource.Dial()
+	defer other.Close()
+	_ = conn
+}

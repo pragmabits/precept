@@ -75,15 +75,21 @@ func (s search) boundSatisfier(closure *ssa.MakeClosure) bool {
 
 // handsOver reports whether a call passes the value as an argument. The
 // receiver of a method is not handed over: calling a method uses the value.
-func (s search) handsOver(common *ssa.CallCommon) bool {
+// Neither is an argument at an index of kept, which the callee keeps.
+func (s search) handsOver(common *ssa.CallCommon, kept []int) bool {
 	if !s.binding.protocol.escapes.passed {
 		return false
 	}
-	arguments := common.Args
-	if !common.IsInvoke() && common.Signature().Recv() != nil && len(arguments) > 0 {
-		arguments = arguments[1:]
+	first := 0
+	if !common.IsInvoke() && common.Signature().Recv() != nil {
+		first = 1
 	}
-	return s.anyCarries(arguments)
+	for index := first; index < len(common.Args); index++ {
+		if !slices.Contains(kept, index) && s.carries(common.Args[index]) {
+			return true
+		}
+	}
+	return false
 }
 
 // keptOutside reports whether a store keeps the value where it outlives the

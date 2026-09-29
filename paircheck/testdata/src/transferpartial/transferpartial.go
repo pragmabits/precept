@@ -19,13 +19,15 @@ func stored(h *holder) {
 	h.conn = resource.Dial()
 }
 
+// passed hands the value to a helper that closes it on every path, which is
+// a satisfier.
 func passed() {
-	conn := resource.Dial() // want `\[dial\] Dial requires Close on conn before function exit`
+	conn := resource.Dial()
 	finish(conn)
 }
 
 func passedInDefer() {
-	conn := resource.Dial() // want `\[dial\] Dial requires Close on conn before function exit`
+	conn := resource.Dial()
 	defer finish(conn)
 }
 
