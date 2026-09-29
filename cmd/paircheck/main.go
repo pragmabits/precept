@@ -40,6 +40,9 @@ var command = driver.Command{
 }
 
 func main() {
+	if driver.VetTool(os.Args[1:]) {
+		driver.Vet(linterName, paircheck.New)
+	}
 	os.Exit(command.Run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
