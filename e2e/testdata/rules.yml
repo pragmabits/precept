@@ -217,3 +217,12 @@ rules:
     require-defer: true
     defer-first: true
     on-success: true
+
+  - id: session
+    trigger: (./session.Store).Open
+    satisfiers:
+      - (./session.Store).Close
+    implementations:
+      - ./session/memory.Store
+      - name: ./session/disk.Store
+        id: session-disk

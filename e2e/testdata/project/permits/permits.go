@@ -36,3 +36,10 @@ func CallbackOfAnotherType(s *sem.Semaphore, next func(int)) {
 	next(1)
 	_ = release
 }
+
+// CallsNext calls a function it received, not the one Acquire returned.
+func CallsNext(s *sem.Semaphore, next func()) {
+	release := s.Acquire() // want `\[permit\] Acquire requires a call on release before function exit`
+	defer next()
+	_ = release
+}
