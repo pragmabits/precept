@@ -57,7 +57,13 @@ make test   # go test -race -count=1 ./...
    the analyzed package can see:
    - it first resolves a name relative to the module (`./internal/x`, `.` for
      the root package) against `pass.Module`, which golangci-lint fills and the
-     command loads with `packages.NeedModule` (`name.go`, `protocol.go`);
+     command loads with `packages.NeedModule` (`name.go`, `protocol.go`). A
+     rule that names anything relative applies only in a module being
+     developed, with a path and no version (`developed`): a dependency, the
+     standard library or no module leave it out;
+   - it applies each rule on an interface to the types of its
+     `implementations`, with their methods in place of the interface's
+     (`implementation.go`);
    - it finds the trigger and the satisfiers by qualified name (`name.go`);
    - it deduces by type the slot that carries the value (receiver, argument or
      result), leaving `context.Context` out of the deduction;
@@ -66,29 +72,44 @@ make test   # go test -race -count=1 ./...
 
    A pass that sees every function of a rule and cannot bind it returns an
    error, which fails the whole run (in golangci-lint, every `go/analysis`
-   linter of it). A pass that sees only some of them skips the rule.
+   linter of it). A pass that sees only some of them skips the rule. Since the
+   analyzer exports facts it runs on the dependencies too, so the first pass to
+   fail is usually the package declaring the rule's functions.
    `validate.go` runs the same resolution strictly over a separate load, for
    the `validate` subcommand.
 3. **Search.** `flow.go` starts at each trigger call and walks the SSA blocks
    depth first. The state is small and finite (open and deferred counts
    saturated at 2, an uncertain flag and a displaced-error flag, and under
-   `on-success` a called flag and the error value and variable the path knows
-   to hold a failure), so the search always terminates. Instructions become
-   events, and a path leaks at a `return` (`leakAtExit`), under `defer-first`
-   at a call made before the deferred satisfier (`leakBeforeDefer`), or under
-   `on-success` at a return that hands back no failure with no satisfier called
-   on the path (`leakOnSuccess`). A `panic` or a call that does not return
-   abandons the path.
+   `on-success` a called flag and the set of errors the path knows to be
+   failures, among those the function can return), so the search always
+   terminates. The set is not compared with the rest: a point already searched
+   knowing some failures is searched again only knowing fewer, since knowing
+   more only keeps a return from leaking. Instructions become events, and a
+   path leaks at a `return` (`leakAtExit`), under `defer-first` at a call made
+   before the deferred satisfier (`leakBeforeDefer`), or under `on-success` at
+   a return that hands back no failure with no satisfier called on the path,
+   nor decided by a closure the path deferred (`leakOnSuccess`). A `panic` or a
+   call that does not return abandons the path. `explore` keeps how every path
+   ended, for a summary.
 4. **The rest of the search:**
    - `failure.go`: the error the trigger returned, and the branches that check
      it;
    - `success.go`: under `on-success`, whether the error a return hands back is
-     a failure;
-   - `identity.go`: access paths and a three-valued sameness;
-   - `closure.go`: deferred closures, as `deferred-closure` says;
+     a failure, and the checks on the path that prove one;
+   - `failures.go`: what a pass knows of the errors that are not nil, the
+     functions and error variables of the analyzed package included;
+   - `identity.go`: access paths and a three-valued sameness, of values and of
+     the memory they are stored in;
+   - `closure.go`: deferred closures, as `deferred-closure` says, and whether
+     one decides how an obligation ends under `on-success`;
+   - `summary.go`: what a function does with a value it receives, searched
+     from its entry before any other search (`learnSummaries`), and the fact
+     that takes it to the packages that import it: a call of one that always
+     discharges is a satisfier, one that always keeps it takes nothing along;
    - `transfer.go`: the exits by return, store and argument;
    - `slot.go`: the value a call carries in a slot, including the receiver a
-     method value binds and the callee for the `call` satisfier;
+     method value binds, read back from a field or a map entry where the
+     function stored it, and the callee for the `call` satisfier;
    - `diagnostic.go`: the message and the source expression of the value.
 
 The design prefers a false negative to a false positive: an unknown identity
@@ -123,13 +144,19 @@ analysis (`Analyze`, over the analyzer's constructor and its configuration),
 and `Setup`, what a golangci-lint configuration says of the run),
 `generated.go` which files are generated (`Generated`), and `report.go` what
 is printed and where (`report`, and `placed`, where golangci-lint places a
-finding).
+finding). An analyzed package that failed because a dependency failed prints
+the dependency's error (`causes`), as golangci-lint does, where the checker
+gives only its name. `vet.go` is each command as go vet's vet tool
+(`VetTool`, `Vet`): the rules by `-config`, an absolute path, read on the first
+package, and any error ends the tool with status 1, since go vet keeps the
+facts of a run whose error came in its JSON and loses the error on the next.
 
 ### `cmd/paircheck/` and `cmd/defcheck/`, the commands
 
 `main.go` of each declares its `driver.Command`, and
 `cmd/paircheck/validate.go` is the mode only paircheck has. What follows holds
-for both, through the driver.
+for both, through the driver. Handed what go vet hands a vet tool, each runs
+as one instead (`driver.Vet`).
 
 - GNU-style flags through pflag; for paircheck, `validate` is the first
   positional argument. defcheck has no `validate`: every rule is checked by
@@ -197,8 +224,11 @@ sit at the repository root: golangci-lint-action builds any root
   stand-in API the other testdata packages import, rules are built with
   `rule(id, trigger, satisfiers...)` and `build(t, rules...)`, and a case that
   expects the analysis to fail passes `recorder`, an `analysistest.Testing`,
-  in place of `t`. In defcheck, `external` stands for a dependency, and rules
-  are built with `build(t, rules...)`.
+  in place of `t`, and runs over `resource`, which with facts is where a rule
+  that does not bind fails. analysistest asks a `// want` of every fact an
+  analyzed package exports: only exported functions export one. In defcheck,
+  `external` stands for a dependency, and rules are built with
+  `build(t, rules...)`.
 - **The commands** are tested in process, through `command.Run`, over their own
   `testdata` modules; the behavior of the driver is tested through both:
   `cmd/paircheck/testdata/generated` for generated files, and, in
@@ -216,7 +246,10 @@ sit at the repository root: golangci-lint-action builds any root
     them, over the packages golangci-lint analyzes (`analyzed`, a copy of
     golangci-lint's filter, kept apart from the command's);
   - behind the `golangci` build tag, golangci-lint with the plugin, whose path
-    comes from `PRECEPT_GOLANGCI_LINT`.
+    comes from `PRECEPT_GOLANGCI_LINT`;
+  - go vet with the built command as its vet tool (`vet_test.go`), which drops
+    no generated finding and prints the findings of `template/view.go` where
+    its `//line` directive places them, in `view.tmpl`.
 
   A run meets only some expectations: those of the `_test.go` files with the
   tests loaded, those of `tagged/`, built only under the `precept` tag, with

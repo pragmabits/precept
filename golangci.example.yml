@@ -45,6 +45,7 @@ linters:
               idempotent: false
               defer-first: false
               on-success: false
+              implementations: []
 
             - id: file
               trigger: os.Open
@@ -57,6 +58,7 @@ linters:
               idempotent: false
               defer-first: false
               on-success: false
+              implementations: []
 
             - id: lock
               trigger: (*sync.Mutex).Lock
@@ -69,3 +71,4 @@ linters:
               idempotent: false
               defer-first: false
               on-success: false
+              implementations: []

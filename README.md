@@ -71,9 +71,12 @@ path inside the module, or `.` alone for the package at the module's root.
 ```
 
 `..Open` is `Open` in the root package. A relative name is resolved against the
-module of each package analyzed, as its `go.mod` declares it, and a package
-that belongs to no module fails the analysis. `validate` resolves it against
-the module of the current directory.
+module of each package analyzed, as its `go.mod` declares it. A rule that names
+anything relative applies only to the packages of a module being developed, one
+without a version, as the main module and those of a workspace are: a package
+of a dependency, of the standard library or of no module is analyzed without
+it. `validate` resolves it against the module of the current directory, and
+refuses it outside a module.
 
 The value the obligation is on is found by its type. It may sit in the
 trigger's receiver, an argument or a result, and in a satisfier's receiver or
@@ -121,6 +124,30 @@ stands for calling it:
 Only a call of a function value of the value's own type counts, so a callback
 of another signature is not taken for it. `call` takes no slot.
 
+A rule on an interface matches calls through the interface. The concrete types
+it should also apply to are listed in the same rule, by their type names,
+each with the rule's `id` or one of its own:
+
+```yaml
+  - id: session
+    trigger: (./session.Store).Open
+    satisfiers:
+      - (./session.Store).Close
+    implementations:
+      - ./session/memory.Store # reports [session]
+      - name: ./session/redis.Store
+        id: session-redis # reports [session-redis]
+```
+
+For each listed type, the rule also applies with the type's methods in place
+of those of the interfaces it implements: `(*redis.Store).Open` requires
+`(*redis.Store).Close`. A method on an interface the type does not implement
+stays as written, so `(Store).Begin` requiring `(Tx).Commit` becomes
+`(*pg.Store).Begin` requiring `(Tx).Commit`. Where a package does not see the
+interface, the type's method of the same name stands for the interface's.
+Every other key of the rule applies to each type alike; a type that needs other
+keys takes a rule of its own.
+
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `id` | required | Starts every diagnostic of the rule. Unique. |
@@ -133,13 +160,15 @@ of another signature is not taken for it. `call` takes no slot.
 | `idempotent` | `false` | A trigger on a value whose obligation is open opens no other. |
 | `defer-first` | `false` | Require a deferred satisfier before any other call once the obligation opens. |
 | `on-success` | `false` | On every return that hands back no failure, require a satisfier called on the path: a deferred one alone does not count. |
+| `implementations` | `[]` | The concrete types a rule on an interface also applies to. Type names, or `{name, id}`. |
 
 A slot is `receiver`, `argument N` or `result N`, counted from zero.
 
 Beside `rules`, the configuration takes `failures`: the functions and methods
 whose call returns an error that is not nil, besides `errors.New` and
 `fmt.Errorf`. A rule that is `on-success` reads a return of what one of them
-returned as a failure.
+returned as a failure. A function of the analyzed package whose every return
+hands back a failure needs no listing.
 
 ```yaml
 failures:
@@ -183,16 +212,28 @@ and as golangci-lint settings.
 - The same value is followed through aliases and fields: `s.res.Open()` and
   `defer s.res.Close()` are one value. A satisfier on a value that may be the
   same, such as another parameter of the same type, discharges; one on a value
-  proven to be another, such as a different allocation, does not.
+  proven to be another, such as a different allocation, does not. Under `call`,
+  the function a trigger returned is not a parameter: `defer next()` does not
+  discharge `release := sem.Acquire()`.
 - A call through an interface discharges when the interface holds the value:
   `var rc io.ReadCloser = f; defer rc.Close()` discharges `os.Open`.
 - A satisfier called through a method value discharges:
   `closer := f.Close; defer closer()`. The method value stands for the value:
   kept in a field, returned or passed along, it takes the obligation with it.
+  Where `transfer` keeps a stored value in the function, a method value the
+  function stores in a field, a map entry or an element and calls from there
+  discharges.
+- A function that receives the value is read once, where it is declared, and
+  what it does with it is what its call does. One that discharges it on every
+  path it returns by is a satisfier where it is called, deferred too, as
+  `defer closeQuietly(f)`. One that neither discharges it nor lets it leave on
+  any path keeps it, and its call takes nothing along: after `logName(f)`, `f`
+  is still open. A function of another package is read through a fact its
+  analysis leaves, which is why paircheck analyzes the dependencies too.
 - A value that leaves the function takes its obligation along: returned,
   stored in a field, a package variable, an element or a channel, or passed to
-  another function, in a plain or a deferred call, a `go` statement or a closure
-  that is not deferred. `transfer` narrows this.
+  another function that is not read so, in a plain or a deferred call, a `go`
+  statement or a closure that is not deferred. `transfer` narrows this.
 - Two triggers on the same value need two satisfiers, unless the rule is
   `idempotent`: then a second `Serve` on a running server needs no second
   `Shutdown`.
@@ -202,10 +243,21 @@ and as golangci-lint settings.
   called on the path, `Commit` or `Rollback`, while the `defer` still covers
   the error and the panic. `return tx.Commit(ctx)` calls it on the path. A
   return is a failure when the error it hands back cannot be nil: a concrete
-  value such as `&ValidationError{}`, what `errors.New`, `fmt.Errorf` or a
-  function in `failures` returned, a package-level error such as `io.EOF`, or
-  an error a check on the path found not nil, as in
-  `if err != nil { return err }`, until something else is stored where it was.
+  value such as `&ValidationError{}`; what `errors.New`, `fmt.Errorf`, a
+  function in `failures` or a function of the analyzed package whose every
+  return is a failure returned; an error variable, such as `io.EOF`, unless it
+  is of the analyzed package and the package shows it may hold nil: its
+  initialization never sets it, or the package sets it to nil; or an error a
+  check on the path
+  found not nil, until something else is stored where it was. The checks are
+  `err != nil`, `errors.Is(err, ErrBusy)` with `ErrBusy` a failure,
+  `errors.As`, `errors.AsType` and a comparison with a failure, as a `case` of
+  a `switch err` makes; each one on every error the function can return, not
+  only on the last one checked. A closure the path deferred decides too when
+  it calls a satisfier on every path where the error returned is not a
+  failure, as a check of the named result in it tells:
+  `defer func() { if err == nil { err = tx.Commit(ctx) } }()`. One that only
+  rolls back where `err != nil` does not.
   Anything else owes the call, `nil` and the result of any other function
   included. In a function without an `error` result, every return owes it. A
   value that leaves the function still takes its obligation along.
@@ -277,6 +329,27 @@ key of golangci-lint's.
 
 `-v`, `--version` prints the version the binary was built from, such as `v0.1.0`.
 
+#### Under go vet
+
+The command is also a vet tool:
+
+```sh
+go vet -vettool="$(command -v paircheck)" -config="$PWD/rules.yml" ./...
+```
+
+`-config` takes the same files as `--config`, by an absolute path: go vet runs
+the tool in the directory of each package. go vet loads the packages, with
+their test files, and keeps in its build cache, for each package, what the
+analysis learned and the findings of a package without any: the next run
+analyzes again only what changed, and a package with findings. It takes the
+build flags of go vet, and reads nothing else of a `.golangci.yml`: its `run`
+section and `linters.exclusions.generated` play no part, and a finding in a
+generated file is printed. A finding is printed where a `//line` directive
+places it, outside a Go file too. An error of the rules or of the analysis
+ends the tool with status 1: returned as go vet asks, go vet would keep the
+facts of that run, report the error once, and report nothing on the next run.
+`-vettool` replaces go vet's own checks for that run.
+
 #### Validating the rules
 
 A misspelled name matches nothing, and the analyzer cannot tell: it sees only
@@ -290,7 +363,10 @@ the rule, since a satisfier it does not see may be what settles the slot. The
 the modules download mode of the analysis, and checks every rule: the
 names exist, one type links the trigger to every satisfier, and each slot is in
 the signature. It also checks that every entry of `failures` exists and returns
-an error as its last result.
+an error as its last result, and that every type of `implementations` exists,
+implements an interface the rule names, has no method of the rule on a
+receiver it does not implement, which a package that does not see the
+interface would take for it, and binds the rule.
 
 ```sh
 paircheck validate --config .golangci.yml
@@ -351,20 +427,29 @@ keeps the test files out of it.
 
 ### Limits
 
-- A helper that discharges the obligation is not a satisfier on its own:
-  passing the value to it is a transfer, and `transfer: {argument: false}`
-  reports it. A helper that always discharges can be listed among the
-  satisfiers, as `example.com/app.closeQuietly`.
-- A rule on an interface method matches calls through that interface, not
-  calls on the concrete types implementing it.
-- A function value is followed while it stays in the function. Called from a
-  field or a map, it is not matched; putting it there already took the
-  obligation along.
-- Under `call`, a call of another function value of the same type, such as a
-  `func()` parameter, may be the value: its identity is unknown, so it
-  discharges, and paircheck stays silent.
-- The command does not run as a `go vet -vettool`: it does not speak the
-  protocol `go vet` uses with a vet tool.
+- A helper called through an interface or a function value, or one that
+  discharges the value on some paths only, is not read: passing the value to it
+  is a transfer, and `transfer: {argument: false}` reports it. A helper can
+  still be listed among the satisfiers, as `example.com/app.closeQuietly`.
+- To read the functions of other packages, paircheck analyzes every
+  dependency, the standard library included. golangci-lint caches what that
+  analysis leaves, and only its first run pays for it; the command keeps no
+  cache, and on a module of two hundred packages takes about twice the time
+  and memory it took without.
+- A rule on an interface method matches calls through that interface, and
+  calls on the concrete types `implementations` lists, not on every type
+  implementing it.
+- A method value of a satisfier is followed into memory only where one
+  function stores it and calls it from there. A call through a field, a map
+  entry or an element the function may have stored it in discharges; the
+  value it discharges is the receiver of the method value only when the store
+  comes right before the call in the same block, with no call between that
+  could store another. Otherwise any value of the rule may be the one, and the
+  call discharges it.
+- Under `call`, a call of another function value of the same type that
+  paircheck cannot trace, such as one read from a field or returned by another
+  function, may be the value: its identity is unknown, so it discharges, and
+  paircheck stays silent.
 - The test main that `go test` generates is left out by the command and by
   golangci-lint, not by the analyzer: inside a pass, only its name would tell
   it apart. Another driver that loads the tests, such as the `singlechecker`
@@ -388,12 +473,14 @@ keeps the test files out of it.
 - `validate` loads the packages the rules name without their tests, whatever
   `--tests` or `run.tests` say: a rule naming a function or method declared in
   a `_test.go` file is refused as unknown, although the analysis applies it.
-- Under `on-success`, an error checked with `errors.Is`, `errors.As` or a
-  `switch` is not known to be a failure, and neither is one a wrapper outside
-  `failures` returned: a return of it with no satisfier called on the path is
-  reported. A package-level error variable left nil is read as a failure.
-- Under `on-success`, a satisfier inside a deferred closure is not a call on
-  the path: `defer func() { … err = tx.Commit(ctx) }()` is reported.
+- Under `on-success`, an error is not known to be a failure when a wrapper of
+  another package outside `failures` returned it, or a wrapper of the analyzed
+  package that returns nil on some path or defers a call; nor when a predicate
+  other than `errors.Is`, `errors.As` and `errors.AsType` checked it. A return
+  of it with no satisfier called on the path is reported. An error variable is
+  read as a failure even if it is left nil when it is of another package, when
+  a function sets it to what may be nil, such as a parameter, or when its
+  address leaves the package.
 
 ## defcheck
 
@@ -511,7 +598,11 @@ exit codes, the test files analyzed unless `--tests=false`, generated files
 dropped as `linters.exclusions.generated` says, and, from a `.golangci.yml`,
 the defcheck settings, native or as a module plugin. It has no `validate`
 mode: every rule is checked before any package loads, and a rule names nothing
-a package declares.
+a package declares. It runs under go vet as paircheck does (see Under go vet):
+
+```sh
+go vet -vettool="$(command -v defcheck)" -config="$PWD/rules.yml" ./...
+```
 
 ### golangci-lint
 
