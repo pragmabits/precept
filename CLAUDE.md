@@ -128,6 +128,11 @@ golangci-lint accepts linters, not detectors.
   `TypesInfo.Implicits`, once for the switch; sorts them by position, since
   `Defs` is a map and the checker prints in the order of the reports; and
   reports each for each rule that forbids it, in the order of the rules.
+- `imposed.go` leaves out a name the code did not choose: `init`, `main` in
+  package `main`, a function go test runs in a test file, by name and
+  signature, and a method that implements an interface the package declares
+  or imports directly, or `error` (`visible`). Only the direct imports count:
+  what an import imports depends on how the driver loaded it.
 - `classify.go` turns a `types.Object` into a `Kind`: a `*types.Var` by
   `Var.Kind()`, a `*types.TypeName` of a `*types.TypeParam` as
   `type-parameter`. A package name, a label and an embedded field have none.
@@ -142,14 +147,24 @@ analysis (`Analyze`, over the analyzer's constructor and its configuration),
 `loading.go` how the packages load (`Loading`, `LoadingOf`, `split`),
 `config.go` the reading of the file (`Read`, generic over the configuration,
 and `Setup`, what a golangci-lint configuration says of the run),
-`generated.go` which files are generated (`Generated`), and `report.go` what
-is printed and where (`report`, and `placed`, where golangci-lint places a
-finding). An analyzed package that failed because a dependency failed prints
-the dependency's error (`causes`), as golangci-lint does, where the checker
-gives only its name. `vet.go` is each command as go vet's vet tool
-(`VetTool`, `Vet`): the rules by `-config`, an absolute path, read on the first
-package, and any error ends the tool with status 1, since go vet keeps the
-facts of a run whose error came in its JSON and loses the error on the next.
+`generated.go` which files are generated (`Generated`), `exclusions.go` what
+`linters.exclusions` and `run.relative-path-mode` say (`exclusions`,
+`relativeTo`), `nolint.go` what a `//nolint` directive silences (`silence`),
+and `report.go` what is printed and where (`report`; `placed`, where
+golangci-lint places a finding; and `filter`, which drops a finding as
+golangci-lint's processors do, in their order). An analyzed package that
+failed because a dependency failed prints the dependency's error (`causes`),
+as golangci-lint does, where the checker gives only its name. `vet.go` is
+each command as go vet's vet tool (`VetTool`, `Vet`): the rules by `-config`,
+an absolute path, read on the first package, and any error ends the tool with
+status 1, since go vet keeps the facts of a run whose error came in its JSON
+and loses the error on the next. Its findings go through the command's
+`filter` and placement (`vetting.run`): unitchecker prints a diagnostic where
+its file set maps it, so one the command places past a `//line` directive is
+reported at the same offset of a copy of its file without directives
+(`printedAt`). Of the run section, `run.tests: false` drops the findings in
+test files, which go vet always analyzes, and `run.build-tags` and
+`run.relative-path-mode: wd` are refused (`vetTests`).
 
 ### `cmd/paircheck/` and `cmd/defcheck/`, the commands
 
@@ -177,7 +192,8 @@ as one instead (`driver.Vet`).
   their key, which is then not read from the file, `--build-tags` adds tags,
   and the load passes them to go as its `makeBuildFlags` does. The keys of the
   file are folded to lower case as viper folds them (`folded`), and two that
-  fold alike are refused.
+  fold alike are refused, inside a rule of `linters.exclusions.rules` too,
+  where viper does not fold them and mapstructure matches them in any case.
 - A finding in a generated file is dropped as golangci-lint drops it:
   `linters.exclusions.generated` of a `.golangci.yml`, read weakly, `strict`
   (`ast.IsGenerated`) when it is not written or empty, `lax` by the markers of
@@ -194,6 +210,14 @@ as one instead (`driver.Vet`).
   one difference is a bug of golangci-lint the README Limits state: it looks
   the package clause up by the name the directive maps to, and so moves into a
   file the findings of the Go file of that name.
+- The other findings golangci-lint drops are dropped in its order (`filter`):
+  the `paths` and `paths-except` of `linters.exclusions`, read from the base
+  `run.relative-path-mode` names; its `rules`, by linter, path, message and
+  line; and a `//nolint` directive, read at the lines of the file it is
+  written in, where golangci-lint reads them at the lines a `//line`
+  directive gives (README Limits). The `presets` are only checked: their
+  rules are for other linters. Under `warn-unused`, only a rule for the
+  linter alone is judged.
 - The rules come from the command's own YAML (`rules:` at the top), or from a
   `.golangci.yml`, as native settings (`linters.settings.<linter>`) or as
   plugin settings (`linters.settings.custom.<linter>.settings`). A file
@@ -228,12 +252,16 @@ sit at the repository root: golangci-lint-action builds any root
   that does not bind fails. analysistest asks a `// want` of every fact an
   analyzed package exports: only exported functions export one. In defcheck,
   `external` stands for a dependency, and rules are built with
-  `build(t, rules...)`.
+  `build(t, rules...)`. analysistest loads the tests and builds the test main
+  go test generates, which fails on a test whose signature go test refuses:
+  such a case is tested through the command (`cmd/defcheck/testdata/signature`),
+  which analyzes the package all the same.
 - **The commands** are tested in process, through `command.Run`, over their own
   `testdata` modules; the behavior of the driver is tested through both:
   `cmd/paircheck/testdata/generated` for generated files, and, in
-  `cmd/defcheck/testdata`, `cgo` for a file that imports `C` and `directive`
-  for `//line` directives.
+  `cmd/defcheck/testdata`, `cgo` for a file that imports `C`, `directive`
+  for `//line` directives, and `exclusions` for `linters.exclusions` and
+  `//nolint`.
 - **End to end:** a `linter` is an analyzer as the suite checks it: its name,
   its project, its rules and the configurations it refuses. `linters()` is
   both, for a test that checks each alike. `e2e/testdata/project` (paircheck) and
@@ -247,9 +275,9 @@ sit at the repository root: golangci-lint-action builds any root
     golangci-lint's filter, kept apart from the command's);
   - behind the `golangci` build tag, golangci-lint with the plugin, whose path
     comes from `PRECEPT_GOLANGCI_LINT`;
-  - go vet with the built command as its vet tool (`vet_test.go`), which drops
-    no generated finding and prints the findings of `template/view.go` where
-    its `//line` directive places them, in `view.tmpl`.
+  - go vet with the built command as its vet tool (`vet_test.go`), which
+    reports what the command reports, the findings of `template/view.go`
+    included, in that file.
 
   A run meets only some expectations: those of the `_test.go` files with the
   tests loaded, those of `tagged/`, built only under the `precept` tag, with
@@ -258,6 +286,12 @@ sit at the repository root: golangci-lint-action builds any root
   `lax`. `expected(t, tests, tagged, generated)` picks them. The plugin
   harness drops what golangci-lint's default `strict` drops (`generated`, in
   `plugin_test.go`).
+
+  `excluded()` is defcheck over `e2e/testdata/defcheck/excluded`, whose
+  `// want` comments expect what `linters.exclusions` and `//nolint` leave,
+  under the configuration `excludedConfig` writes: the command, golangci-lint
+  and go vet are checked against it, and the plugin harness, which runs none
+  of golangci-lint's processors, is not.
 
   `e2e/testdata/refused/*.yml` must fail with the error in the test's
   `refusals` table, and `e2e/testdata/defcheck/refused/*.yml` with the error
@@ -285,7 +319,16 @@ sit at the repository root: golangci-lint-action builds any root
   precedence of viper and of `applyStringSliceHack`; `generatedOf`,
   `laxMarkers` and `Generated.generated` the default of `pkg/config/loader.go`
   and the matcher of
-  `pkg/result/processors/exclusion_generated_file_matcher.go`; `placed` its
+  `pkg/result/processors/exclusion_generated_file_matcher.go`; `filter.kept`
+  the order of `NewRunner` (`pkg/lint/runner.go`) and its `PathRelativity`;
+  `exclusionsOf`, `rulesOf`, `ruleOf`, `validRule`, `patternsOf`,
+  `checkPresets`, `warnUnusedOf` and `listOf` the decoding and validation of
+  `pkg/config/linters_exclusions.go` and `base_rule.go`, weakly typed, with
+  the `StringToSliceHookFunc(",")` of `DecodeHookFunc`; `excludes` its
+  `ExclusionPaths`, `unmatched`, `matches` and `String` its `ExclusionRules`
+  and `baseRule`, and `sourceLines` its `LineCache.GetLine`; `relativeTo.base`
+  its `GetBasePath` (`pkg/fsutils/basepath.go`); `silencesIn` and `silenceOf`
+  its `NolintFilter`, but for the lines a `//line` directive gives; `placed` its
   `GetFilePositionFor` (`pkg/goanalysis/position.go`) and, but for the lookup
   by name, its `FilenameUnadjuster`; `placedFindings` its `InvalidIssue`,
   which drops a finding outside a Go file; and `report` the warning of

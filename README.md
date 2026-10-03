@@ -320,12 +320,26 @@ file, such as in a file cgo generates, is never printed. When a directive
 points to a file that cannot be read, the command warns, as golangci-lint
 does, and drops no finding in a generated file.
 
+The other findings golangci-lint drops, the command drops too, in
+golangci-lint's order. From `linters.exclusions`: a finding in a file one of
+`paths` matches, or none of `paths-except` does, and one a rule of `rules`
+matches, by its linter, the path of its file (`path`, `path-except`), its
+message (`text`) and its line (`source`). The paths are read from the base
+`run.relative-path-mode` names: the directory of the `.golangci.yml` by
+default, the module's root (`gomod`), the git repository's (`gitroot`) or the
+working directory (`wd`). The `presets` are only checked: every rule of theirs
+is for another linter. And a finding a `//nolint` directive silences, for
+every linter or for this one: on its line, or on the line above a declaration
+in its column, which it silences whole. Under `warn-unused`, the command warns
+of a rule for its linter alone that dropped no finding; a path, or a rule that
+may drop the findings of another linter, it cannot judge from its own.
+
 From a `.golangci.yml` the command reads only the paircheck settings, those
-three keys of `run`, `tests`, `build-tags` and `modules-download-mode`, and
-`linters.exclusions.generated`. Their keys may be written in any case, as
-golangci-lint reads them, and two keys that differ only in case are refused.
-It does not follow the rest of `linters.exclusions`, `//nolint`, or any other
-key of golangci-lint's.
+four keys of `run`, `tests`, `build-tags`, `modules-download-mode` and
+`relative-path-mode`, and `linters.exclusions`. Their keys may be written in
+any case, as golangci-lint reads them, and two keys that differ only in case
+are refused, inside a rule of `linters.exclusions.rules` too. It does not
+follow any other key of golangci-lint's.
 
 `-v`, `--version` prints the version the binary was built from, such as `v0.1.0`.
 
@@ -341,14 +355,26 @@ go vet -vettool="$(command -v paircheck)" -config="$PWD/rules.yml" ./...
 the tool in the directory of each package. go vet loads the packages, with
 their test files, and keeps in its build cache, for each package, what the
 analysis learned and the findings of a package without any: the next run
-analyzes again only what changed, and a package with findings. It takes the
-build flags of go vet, and reads nothing else of a `.golangci.yml`: its `run`
-section and `linters.exclusions.generated` play no part, and a finding in a
-generated file is printed. A finding is printed where a `//line` directive
-places it, outside a Go file too. An error of the rules or of the analysis
-ends the tool with status 1: returned as go vet asks, go vet would keep the
-facts of that run, report the error once, and report nothing on the next run.
-`-vettool` replaces go vet's own checks for that run.
+analyzes again only what changed, and a package with findings. The tool drops
+and places the findings as the command does: those in generated files, those
+`linters.exclusions` and `//nolint` drop, and, after a `//line` directive, a
+finding in the Go file, where the command prints it.
+
+go vet builds the packages, under its own build flags, and of the `run`
+section the tool follows what it can. `run.tests: false` drops the findings in
+the test files, which go vet analyzes all the same. `run.build-tags` is
+refused, since go vet builds the packages without them: pass the tags to go
+vet as `-tags`, with a configuration that does not write the key.
+`run.relative-path-mode: wd` is refused too, since the tool runs in the
+directory of each package, from which `gomod` and `gitroot` are read.
+`run.modules-download-mode` changes nothing go vet analyzes, and plays no
+part. `linters.exclusions.warn-unused` warns of nothing: each run of the tool
+sees one package.
+
+An error of the rules or of the analysis ends the tool with status 1: returned
+as go vet asks, go vet would keep the facts of that run, report the error once,
+and report nothing on the next run. `-vettool` replaces go vet's own checks for
+that run.
 
 #### Validating the rules
 
@@ -470,6 +496,20 @@ keeps the test files out of it.
   findings of that other file in this one, at positions that are not theirs,
   and read them as this file's when it drops generated files. The command
   leaves each finding in its own file.
+- A `//nolint` directive is read at the lines of the file it is written in.
+  After a `//line` directive to a file that is not Go, golangci-lint reads it
+  at the lines the directive gives, and reports a finding the directive
+  silences in the command. The command does not warn of a `//nolint` naming a
+  linter it does not know, as golangci-lint does: it does not know
+  golangci-lint's.
+- On Windows, golangci-lint reads a `/` in the path patterns of
+  `linters.exclusions` as the path separator (`NormalizePathInRegex`), and the
+  command does not: there, a pattern with a `/` matches no path the command
+  reads.
+- Under go vet, `run.tests: false` drops the findings in the test files, but
+  paircheck still analyzes each package with them: an error variable a test
+  file sets to nil, or a rule on a function a test file declares, can change
+  what is reported outside the tests.
 - `validate` loads the packages the rules name without their tests, whatever
   `--tests` or `run.tests` say: a rule naming a function or method declared in
   a `_test.go` file is refused as unknown, although the analysis applies it.
@@ -583,6 +623,17 @@ format and as golangci-lint settings.
 - A renamed import, `import cfg "example.com/config"`, and a label are not
   kinds of declaration. revive's `import-alias-naming`, with its `denyRegex`,
   forbids patterns in import names.
+- A name the code did not choose is left out:
+  - `init`, and `main` in package `main`, which the language runs;
+  - in a `_test.go` file, a function `go test` runs, by its name and its
+    signature: `TestXxx(*testing.T)`, `BenchmarkXxx(*testing.B)`,
+    `FuzzXxx(*testing.F)`, `ExampleXxx()` and `TestMain(*testing.M)`. The
+    whole name is left out, what follows the prefix included: `TestCfgParse`
+    is not reported by `(?i)cfg`;
+  - a method that, with the others of its type, implements an interface the
+    package declares, one of a package it imports, or `error`: `MarshalJSON`
+    in a package that imports `encoding/json`. The method of an interface the
+    package declares is reported, since its name is chosen there.
 
 ### Running it
 
@@ -594,11 +645,12 @@ defcheck --config rules.yml ./...
 
 The command reads its rules, loads the packages and prints its findings as
 paircheck's does (see Running it, under paircheck): the same flags, the same
-exit codes, the test files analyzed unless `--tests=false`, generated files
-dropped as `linters.exclusions.generated` says, and, from a `.golangci.yml`,
-the defcheck settings, native or as a module plugin. It has no `validate`
-mode: every rule is checked before any package loads, and a rule names nothing
-a package declares. It runs under go vet as paircheck does (see Under go vet):
+exit codes, the test files analyzed unless `--tests=false`, the findings
+dropped as `linters.exclusions` and `//nolint` drop them, and, from a
+`.golangci.yml`, the defcheck settings, native or as a module plugin. It has
+no `validate` mode: every rule is checked before any package loads, and a rule
+names nothing a package declares. It runs under go vet as paircheck does (see
+Under go vet):
 
 ```sh
 go vet -vettool="$(command -v defcheck)" -config="$PWD/rules.yml" ./...
@@ -628,10 +680,15 @@ linters:
 
 ### Limits
 
-- A name the language, the toolchain or an interface imposes is reported like
-  any other the pattern matches: `init`, a `TestXxx` function, a method
-  `MarshalJSON` that implements `json.Marshaler`. Narrow the pattern or the
-  kinds, or, in golangci-lint, write `//nolint:defcheck` on the line.
+- A name imposed by what defcheck does not see is reported like any other the
+  pattern matches: a method of an interface whose package the package does
+  not import, as `MarshalJSON` without `encoding/json` or `Len` without
+  `sort`, or a name cgo's `//export`, reflection or a template reads. Only the
+  package's own imports count: what an import imports depends on how a driver
+  loaded it, and the drivers would disagree. Narrow the pattern or the kinds,
+  or write `//nolint:defcheck` on the line.
+- A method that implements an interface the package sees, without being used
+  as one, is left out all the same.
 - The test main that `go test` generates is analyzed by another driver that
   loads the tests, such as the `singlechecker` of `golang.org/x/tools`, and a
   rule that matches a name in it, such as `m`, reports it there, in a file of
