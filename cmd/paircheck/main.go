@@ -10,8 +10,10 @@
 // in its settings, native or as a module plugin. The packages load as in
 // golangci-lint: with the test files, unless --tests=false, and under
 // --build-tags and --modules-download-mode, over the run section of a
-// golangci-lint configuration. A finding in a generated file is dropped as
-// linters.exclusions.generated says, strict when it is not written.
+// golangci-lint configuration. A finding is dropped as golangci-lint drops it:
+// in a generated file, as linters.exclusions.generated says, strict when it
+// is not written, by the rest of linters.exclusions, and by a //nolint
+// directive.
 package main
 
 import (
@@ -75,7 +77,7 @@ func dispatch(path string, flags *pflag.FlagSet, stdout, stderr io.Writer) (int,
 		mode,
 		patterns,
 		load,
-		setup.Generated,
+		setup,
 		stdout,
 		stderr,
 	)

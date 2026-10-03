@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,14 +22,17 @@ var (
 )
 
 // Setup is what a golangci-lint configuration says of how a command runs,
-// besides the rules: which findings in generated files it drops, decoded where
-// the file is read, and the run section, kept as the file wrote it, since a
-// flag written on the command line replaces its key, which is then not read
-// (LoadingOf). The command's own file says nothing: its setup drops the findings
-// in generated files as strict does.
+// besides the rules: which findings it drops, decoded where the file is read,
+// with the base their paths are read from, and the run section, kept as the
+// file wrote it, since a flag written on the command line replaces its key,
+// which is then not read (LoadingOf). The command's own file says nothing: its
+// setup drops the findings in generated files as strict does, and no other.
 type Setup struct {
-	Generated Generated
-	section   map[string]any
+	Generated  Generated
+	exclusions exclusions
+	relative   relativeTo
+	directory  string
+	section    map[string]any
 }
 
 // Read decodes the file into T the way a module plugin decodes its settings:
@@ -54,7 +58,7 @@ func Read[T any](path, linter string) (T, Setup, error) {
 	if err != nil {
 		return config, Setup{}, fmt.Errorf("%s: %w", path, err)
 	}
-	generated, err := generatedOf(golangci)
+	setup, err := setupOf(path, golangci)
 	if err != nil {
 		return config, Setup{}, fmt.Errorf("%s: %w", path, err)
 	}
@@ -67,8 +71,52 @@ func Read[T any](path, linter string) (T, Setup, error) {
 	if err := decoder.Decode(&config); err != nil {
 		return config, Setup{}, fmt.Errorf("%s: %w", path, err)
 	}
+	return config, setup, nil
+}
+
+// setupOf is what golangci, the golangci-lint configuration at path, says of
+// how a command runs, and what the command's own file at path says when
+// golangci is nil.
+func setupOf(path string, golangci map[string]any) (Setup, error) {
+	generated, err := generatedOf(golangci)
+	if err != nil {
+		return Setup{}, err
+	}
+	excluded, err := exclusionsOf(golangci)
+	if err != nil {
+		return Setup{}, err
+	}
 	section, _ := golangci["run"].(map[string]any)
-	return config, Setup{Generated: generated, section: section}, nil
+	relative, err := relativeOf(section["relative-path-mode"])
+	if err != nil {
+		return Setup{}, err
+	}
+	directory, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return Setup{}, err
+	}
+	return Setup{
+		Generated:  generated,
+		exclusions: excluded,
+		relative:   relative,
+		directory:  directory,
+		section:    section,
+	}, nil
+}
+
+// filter is what drops a finding of linter as s says, with the paths read
+// from the base s names.
+func (s Setup) filter(linter string) (filter, error) {
+	base, err := s.relative.base(s.directory)
+	if err != nil {
+		return filter{}, err
+	}
+	return filter{
+		linter:     linter,
+		base:       base,
+		generated:  s.Generated,
+		exclusions: s.exclusions,
+	}, nil
 }
 
 // folded is section with the keys of its maps in lower case, at any depth but

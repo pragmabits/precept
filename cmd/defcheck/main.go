@@ -9,8 +9,10 @@
 // in its settings, native or as a module plugin. The packages load as in
 // golangci-lint: with the test files, unless --tests=false, and under
 // --build-tags and --modules-download-mode, over the run section of a
-// golangci-lint configuration. A finding in a generated file is dropped as
-// linters.exclusions.generated says, strict when it is not written.
+// golangci-lint configuration. A finding is dropped as golangci-lint drops it:
+// in a generated file, as linters.exclusions.generated says, strict when it
+// is not written, by the rest of linters.exclusions, and by a //nolint
+// directive.
 //
 // defcheck has no validate mode: every rule is checked when the analyzer is
 // built, before any package loads.
@@ -65,7 +67,7 @@ func analyze(path string, flags *pflag.FlagSet, stdout, stderr io.Writer) (int, 
 		mode,
 		flags.Args(),
 		load,
-		setup.Generated,
+		setup,
 		stdout,
 		stderr,
 	)

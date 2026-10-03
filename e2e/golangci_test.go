@@ -204,3 +204,16 @@ func TestGolangciFollowsGenerated(t *testing.T) {
 		}
 	}
 }
+
+// TestGolangciFollowsExclusions drops what the paths and rules of
+// linters.exclusions and //nolint directives drop, which the command and go
+// vet drop alike.
+func TestGolangciFollowsExclusions(t *testing.T) {
+	current := excluded()
+	config := current.excludedConfig(t)
+	code, stdout, stderr := current.golangci(t, "run", "-c", config, "./...")
+	if code != golangciIssues {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, golangciIssues, stderr)
+	}
+	current.compare(t, current.findings(t, stdout, " ("+current.name+")"))
+}

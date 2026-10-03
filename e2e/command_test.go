@@ -267,6 +267,19 @@ func TestCommandFollowsGenerated(t *testing.T) {
 	}
 }
 
+// TestCommandFollowsExclusions drops what the paths and rules of
+// linters.exclusions and //nolint directives drop, as golangci-lint does in
+// TestGolangciFollowsExclusions.
+func TestCommandFollowsExclusions(t *testing.T) {
+	current := excluded()
+	config := current.excludedConfig(t)
+	code, stdout, stderr := current.execute(t, nil, current.command, "-c", config, "./...")
+	if code != exitFindings || stderr != "" {
+		t.Fatalf("exit = %d, stderr = %q, want %d and none", code, stderr, exitFindings)
+	}
+	current.compare(t, current.findings(t, stdout, ""))
+}
+
 func TestCommandDefcheckRefuses(t *testing.T) {
 	for _, current := range defcheck.refused {
 		t.Run(filepath.Base(current.file), func(t *testing.T) {

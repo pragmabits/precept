@@ -201,6 +201,400 @@ func TestAnalyzeKeepsGeneratedFilesWhenOneCannotBeRead(t *testing.T) {
 	}
 }
 
+// The findings of the rule ^cfg in testdata/exclusions that some exclusion can
+// drop.
+var (
+	keptFinding   = forbidden("kept/kept.go:4:5", "cfgKept")
+	pathFinding   = forbidden("paths/paths.go:4:5", "cfgPath")
+	textFinding   = forbidden("rules/rules.go:5:5", "cfgText")
+	sourceFinding = forbidden("rules/rules.go:7:5", "cfgSource")
+	otherFinding  = forbidden("silenced/silenced.go:11:5", "cfgOther")
+	blockFinding  = forbidden("silenced/silenced.go:17:5", "cfgBlock")
+	belowFinding  = forbidden("silenced/silenced.go:31:5", "cfgBelow")
+	shownFinding  = forbidden("directive/view.go:9:5", "cfgShown")
+	rulePackages  = []string{"./kept", "./paths", "./rules"}
+)
+
+// TestAnalyzeFollowsExclusionPaths drops a finding in a file whose path from
+// the base linters.exclusions.paths matches, or that no paths-except matches.
+// A text written for the list is split at its commas, and an element of a list
+// is not.
+func TestAnalyzeFollowsExclusionPaths(t *testing.T) {
+	tests := []struct {
+		name       string
+		exclusions string
+		want       []string
+	}{
+		{name: "paths", exclusions: "paths: [^paths/]", want: []string{keptFinding}},
+		{name: "paths-except", exclusions: "paths-except: [^paths/]", want: []string{pathFinding}},
+		{
+			name:       "text split at commas",
+			exclusions: `paths: "^none/,^paths/"`,
+			want:       []string{keptFinding},
+		},
+		{
+			name:       "element not split",
+			exclusions: `paths: ["^none/,^paths/"]`,
+			want:       []string{keptFinding, pathFinding},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "exclusions"))
+			config := exclusionsConfig(t, "wd", test.exclusions)
+			code, stdout, stderr := execute("-c", config, "./kept", "./paths")
+			if code != driver.ExitFindings || stderr != "" {
+				t.Fatalf("exit = %d, stderr = %q, want %d and none", code, stderr, driver.ExitFindings)
+			}
+			if got := findings(t, stdout); !slices.Equal(got, test.want) {
+				t.Errorf("findings = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestAnalyzeFollowsRelativePathMode reads the paths of linters.exclusions from
+// the base run.relative-path-mode names: by default the directory of the
+// configuration, which here is not the project's.
+func TestAnalyzeFollowsRelativePathMode(t *testing.T) {
+	tests := []struct {
+		mode string
+		path string
+		want []string
+	}{
+		{mode: "cfg", path: "^paths/", want: []string{keptFinding, pathFinding}},
+		{mode: "", path: "^paths/", want: []string{keptFinding, pathFinding}},
+		{mode: "wd", path: "^paths/", want: []string{keptFinding}},
+		{mode: "gomod", path: "^paths/", want: []string{keptFinding}},
+		{
+			mode: "gitroot",
+			path: "^cmd/defcheck/testdata/exclusions/paths/",
+			want: []string{keptFinding},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.mode, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "exclusions"))
+			config := exclusionsConfig(t, test.mode, "paths: ["+test.path+"]")
+			code, stdout, stderr := execute("-c", config, "./kept", "./paths")
+			if code != driver.ExitFindings || stderr != "" {
+				t.Fatalf("exit = %d, stderr = %q, want %d and none", code, stderr, driver.ExitFindings)
+			}
+			if got := findings(t, stdout); !slices.Equal(got, test.want) {
+				t.Errorf("findings = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestAnalyzeReadsPathsFromTheConfigurationDirectory runs with a configuration
+// in the project, whose paths are read from where it is.
+func TestAnalyzeReadsPathsFromTheConfigurationDirectory(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "exclusions"))
+	code, stdout, stderr := execute("-c", "golangci.yml", "./kept", "./paths")
+	if code != driver.ExitFindings || stderr != "" {
+		t.Fatalf("exit = %d, stderr = %q, want %d and none", code, stderr, driver.ExitFindings)
+	}
+	if got, want := findings(t, stdout), []string{keptFinding}; !slices.Equal(got, want) {
+		t.Errorf("findings = %q, want %q", got, want)
+	}
+}
+
+// TestAnalyzeRefusesGitRootOutsideGit refuses paths read from the root of a
+// git repository when the command runs outside of one.
+func TestAnalyzeRefusesGitRootOutsideGit(t *testing.T) {
+	project := t.TempDir()
+	files := map[string]string{
+		"go.mod":  "module example.com/outside\n\ngo 1.26.0\n",
+		"main.go": "package main\n\nvar cfgOutside = 1\n\nfunc main() {}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(project, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	t.Chdir(project)
+	config := exclusionsConfig(t, "gitroot", "paths: [^none/]")
+	code, stdout, stderr := execute("-c", config, "./...")
+	if code != driver.ExitFailed || stdout != "" || !strings.Contains(stderr, "git") {
+		t.Errorf(
+			"exit = %d, stdout = %q, stderr = %q, want %d and git named",
+			code,
+			stdout,
+			stderr,
+			driver.ExitFailed,
+		)
+	}
+}
+
+// TestAnalyzeFollowsExclusionRules drops a finding every condition of an
+// exclusion rule matches: its linter, the path of its file, its message, and
+// the line it is on.
+func TestAnalyzeFollowsExclusionRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		exclusions string
+		want       []string
+	}{
+		{
+			name:       "text and linters",
+			exclusions: "rules: [{text: cfgText, linters: [defcheck]}]",
+			want:       []string{keptFinding, pathFinding, sourceFinding},
+		},
+		{
+			name:       "source and path",
+			exclusions: "rules: [{source: marked, path: ^rules/}]",
+			want:       []string{keptFinding, pathFinding, textFinding},
+		},
+		{
+			name:       "path-except and text",
+			exclusions: "rules: [{path-except: ^rules/, text: package-var}]",
+			want:       []string{textFinding, sourceFinding},
+		},
+		{
+			name:       "another linter",
+			exclusions: "rules: [{text: cfgText, linters: [errcheck]}]",
+			want:       []string{keptFinding, pathFinding, textFinding, sourceFinding},
+		},
+		{
+			name:       "linters split at commas",
+			exclusions: `rules: [{text: cfgText, linters: "errcheck,defcheck"}]`,
+			want:       []string{keptFinding, pathFinding, sourceFinding},
+		},
+		{
+			name:       "keys in any case",
+			exclusions: "rules: [{Text: cfgText, LINTERS: [defcheck]}]",
+			want:       []string{keptFinding, pathFinding, sourceFinding},
+		},
+		{
+			name:       "a rule for a list",
+			exclusions: "rules: {text: cfgText, linters: [defcheck]}",
+			want:       []string{keptFinding, pathFinding, sourceFinding},
+		},
+		{
+			name:       "presets",
+			exclusions: "presets: [comments, std-error-handling, common-false-positives, legacy]",
+			want:       []string{keptFinding, pathFinding, textFinding, sourceFinding},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "exclusions"))
+			config := exclusionsConfig(t, "wd", test.exclusions)
+			code, stdout, stderr := execute(append([]string{"-c", config}, rulePackages...)...)
+			if code != driver.ExitFindings || stderr != "" {
+				t.Fatalf("exit = %d, stderr = %q, want %d and none", code, stderr, driver.ExitFindings)
+			}
+			if got := findings(t, stdout); !slices.Equal(got, test.want) {
+				t.Errorf("findings = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestAnalyzeWarnsUnusedExclusions warns, under linters.exclusions.warn-unused,
+// of a rule for this linter alone that dropped no finding. A path, and a rule
+// that may drop the findings of another linter, are not judged: the command
+// sees only its own findings.
+func TestAnalyzeWarnsUnusedExclusions(t *testing.T) {
+	rules := "rules: [" +
+		"{text: nomatch, linters: [defcheck]}, " +
+		"{text: cfgText, linters: [defcheck]}, " +
+		"{text: nomatch, linters: [errcheck]}, " +
+		"{text: nomatch, path: ^rules/}]"
+	tests := []struct {
+		warn string
+		want string
+	}{
+		{
+			warn: "true",
+			want: `defcheck: skipped 0 issues by rules: [Text: "nomatch", Linters: "defcheck"]` + "\n",
+		},
+		{warn: "false", want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.warn, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "exclusions"))
+			config := exclusionsConfig(t, "wd", "warn-unused: "+test.warn, rules, "paths: [^none/]")
+			code, stdout, stderr := execute("-c", config, "./rules")
+			if code != driver.ExitFindings || stderr != test.want {
+				t.Fatalf(
+					"exit = %d, stderr = %q, want %d and %q",
+					code,
+					stderr,
+					driver.ExitFindings,
+					test.want,
+				)
+			}
+			if got, want := findings(t, stdout), []string{sourceFinding}; !slices.Equal(got, want) {
+				t.Errorf("findings = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestAnalyzeRefusesInvalidExclusions(t *testing.T) {
+	tests := []struct {
+		defect     string
+		exclusions string
+		want       string
+	}{
+		{
+			defect:     "one condition",
+			exclusions: "rules: [{text: cfgText}]",
+			want:       "error in exclude rule #0: at least 2 of (text, source, path[-except], linters)",
+		},
+		{
+			defect:     "no linter",
+			exclusions: "rules: [{text: cfgText, linters: []}]",
+			want:       "error in exclude rule #0: at least 2 of (text, source, path[-except], linters)",
+		},
+		{
+			defect:     "path and path-except",
+			exclusions: "rules: [{text: cfgText, path: a, path-except: b}]",
+			want:       "error in exclude rule #0: path and path-except should not be set at the same time",
+		},
+		{
+			defect:     "invalid text",
+			exclusions: `rules: [{text: "(cfg", linters: [defcheck]}]`,
+			want:       "error in exclude rule #0: invalid text regex",
+		},
+		{
+			defect:     "invalid source",
+			exclusions: `rules: [{source: "(cfg", linters: [defcheck]}]`,
+			want:       "error in exclude rule #0: invalid source regex",
+		},
+		{
+			defect:     "invalid path",
+			exclusions: `rules: [{path: "(cfg", linters: [defcheck]}]`,
+			want:       "error in exclude rule #0: invalid path regex",
+		},
+		{
+			defect:     "invalid path-except",
+			exclusions: `rules: [{path-except: "(cfg", linters: [defcheck]}]`,
+			want:       "error in exclude rule #0: invalid path-except regex",
+		},
+		{
+			defect:     "rule not a map",
+			exclusions: "rules: [cfgText]",
+			want:       "linters.exclusions.rules[0] is not a map",
+		},
+		{
+			defect:     "text not a text",
+			exclusions: "rules: [{text: [cfgText], linters: [defcheck]}]",
+			want:       "linters.exclusions.rules[0].text is not a text",
+		},
+		{
+			defect:     "keys that fold alike",
+			exclusions: "rules: [{text: a, Text: b, linters: [defcheck]}]",
+			want:       "keys differ only in case: Text and text",
+		},
+		{
+			defect:     "invalid paths",
+			exclusions: `paths: ["(paths"]`,
+			want:       `linters.exclusions.paths: can't compile regexp "(paths"`,
+		},
+		{
+			defect:     "invalid paths-except",
+			exclusions: `paths-except: ["(paths"]`,
+			want:       `linters.exclusions.paths-except: can't compile regexp "(paths"`,
+		},
+		{
+			defect:     "paths not a list",
+			exclusions: "paths: {a: b}",
+			want:       "linters.exclusions.paths is not a list of texts",
+		},
+		{
+			defect:     "unknown preset",
+			exclusions: "presets: [nope]",
+			want:       "invalid preset: nope",
+		},
+		{
+			defect:     "warn-unused not a boolean",
+			exclusions: `warn-unused: "yes"`,
+			want:       "linters.exclusions.warn-unused is neither true nor false",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.defect, func(t *testing.T) {
+			t.Chdir(filepath.Join("testdata", "exclusions"))
+			config := exclusionsConfig(t, "wd", test.exclusions)
+			code, stdout, stderr := execute("-c", config, "./kept")
+			if code != driver.ExitFailed || stdout != "" || !strings.Contains(stderr, test.want) {
+				t.Errorf(
+					"exit = %d, stdout = %q, stderr = %q, want %d and %q",
+					code,
+					stdout,
+					stderr,
+					driver.ExitFailed,
+					test.want,
+				)
+			}
+		})
+	}
+}
+
+func TestAnalyzeRefusesUnknownRelativePathMode(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "exclusions"))
+	config := exclusionsConfig(t, "GoMod", "paths: [^paths/]")
+	code, stdout, stderr := execute("-c", config, "./kept")
+	want := "unknown relative path mode: GoMod"
+	if code != driver.ExitFailed || stdout != "" || !strings.Contains(stderr, want) {
+		t.Errorf(
+			"exit = %d, stdout = %q, stderr = %q, want %d and %q",
+			code,
+			stdout,
+			stderr,
+			driver.ExitFailed,
+			want,
+		)
+	}
+}
+
+// TestAnalyzeFollowsNolint drops a finding a //nolint directive silences for
+// every linter or for this one: on its line, or on the line above a
+// declaration in the same column, which it silences whole. A directive is
+// read at the lines of the file it is written in, where the command places a
+// finding after a line directive to a template.
+func TestAnalyzeFollowsNolint(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "exclusions"))
+	config := exclusionsConfig(t, "wd")
+	code, stdout, stderr := execute("-c", config, "./silenced", "./directive")
+	if code != driver.ExitFindings || stderr != "" {
+		t.Fatalf("exit = %d, stderr = %q, want %d and none", code, stderr, driver.ExitFindings)
+	}
+	want := []string{shownFinding, otherFinding, blockFinding, belowFinding}
+	if got := findings(t, stdout); !slices.Equal(got, want) {
+		t.Errorf("findings = %q, want %q", got, want)
+	}
+}
+
+// TestAnalyzeReportsTestsGoTestRefuses reports a function named as go test
+// names one it runs, whose signature go test refuses: the command analyzes the
+// package all the same, and go test runs none of them. One it runs is left
+// out.
+func TestAnalyzeReportsTestsGoTestRefuses(t *testing.T) {
+	t.Chdir(filepath.Join("testdata", "signature"))
+	config := write(t, "rules:\n  - pattern: (?i)cfg\n    kinds: [function]\n")
+	code, stdout, stderr := execute("-c", config, "./...")
+	if code != driver.ExitFindings {
+		t.Fatalf("exit = %d, want %d; stderr: %s", code, driver.ExitFindings, stderr)
+	}
+	forbidden := func(position, name string) string {
+		return position + `: declaration name "` + name +
+			`" is forbidden by pattern "(?i)cfg" for function`
+	}
+	want := []string{
+		forbidden("signature_test.go:11:6", "BenchmarkCfgOther"),
+		forbidden("signature_test.go:13:6", "FuzzCfgGeneric"),
+		forbidden("signature_test.go:7:6", "TestCfgArgument"),
+		forbidden("signature_test.go:9:6", "TestCfgResult"),
+	}
+	if got := findings(t, stdout); !slices.Equal(got, want) {
+		t.Errorf("findings = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeWithoutRules(t *testing.T) {
 	t.Chdir(filepath.Join("testdata", "project"))
 	code, stdout, stderr := execute("-c", write(t, "rules: []\n"), "./...")
@@ -350,6 +744,34 @@ const rulesSettings = `linters:
           kinds: [package-var, local-var]
           message: avoid the cfg abbreviation
 `
+
+// exclusionsConfig writes a golangci-lint configuration with the rule ^cfg,
+// with run.relative-path-mode as mode, or unwritten when mode is empty, and
+// with each line of exclusions under linters.exclusions.
+func exclusionsConfig(t *testing.T, mode string, exclusions ...string) string {
+	t.Helper()
+	var content strings.Builder
+	content.WriteString("version: \"2\"\n")
+	if mode != "" {
+		content.WriteString("run:\n  relative-path-mode: " + mode + "\n")
+	}
+	content.WriteString(
+		"linters:\n  settings:\n    defcheck:\n      rules:\n        - pattern: ^cfg\n",
+	)
+	if len(exclusions) > 0 {
+		content.WriteString("  exclusions:\n")
+	}
+	for _, line := range exclusions {
+		content.WriteString("    " + line + "\n")
+	}
+	return write(t, content.String())
+}
+
+// forbidden is the finding of the rule ^cfg on a package variable named name,
+// at position.
+func forbidden(position, name string) string {
+	return position + `: declaration name "` + name + `" is forbidden by pattern "^cfg" for package-var`
+}
 
 func execute(arguments ...string) (code int, stdout, stderr string) {
 	var output, errors bytes.Buffer

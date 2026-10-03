@@ -1,7 +1,9 @@
-// Package e2e_test checks the command of each analyzer, the module plugin and
-// golangci-lint against a project per analyzer, whose source says in
-// `// want` comments what each rule reports on each line. A diagnostic no
-// comment expects fails, and so does a comment no diagnostic meets.
+// Package e2e_test checks the command of each analyzer, the module plugin,
+// golangci-lint and go vet, with the command as its vet tool, against a project
+// per analyzer, and one whose findings linters.exclusions and //nolint drop.
+// The source of each says in `// want` comments what each rule reports on each
+// line. A diagnostic no comment expects fails, and so does a comment no
+// diagnostic meets.
 package e2e_test
 
 import (
@@ -57,6 +59,34 @@ var (
 // linters is each linter of the suite, with the command TestMain built.
 func linters() []linter {
 	return []linter{paircheck, defcheck}
+}
+
+// excluded is defcheck over a project whose findings linters.exclusions and
+// //nolint directives drop: its `// want` comments expect only what neither
+// drops, under the configuration excludedConfig writes.
+func excluded() linter {
+	current := defcheck
+	current.project = "testdata/defcheck/excluded"
+	return current
+}
+
+// excludedConfig writes the golangci-lint configuration of the project of
+// excluded: the rule ^cfg, the paths and rules of linters.exclusions, and the
+// paths read from the module's root, as every driver reads them, go vet
+// included, which runs the tool in the directory of each package.
+func (l linter) excludedConfig(t *testing.T) string {
+	t.Helper()
+	settings := map[string]any{"rules": []any{map[string]any{"pattern": "^cfg"}}}
+	document := l.golangciDocument(settings, map[string]any{"relative-path-mode": "gomod"})
+	linters, _ := document["linters"].(map[string]any)
+	linters["exclusions"] = map[string]any{
+		"paths": []any{"^skipped/"},
+		"rules": []any{
+			map[string]any{"text": "cfgText", "linters": []any{"defcheck"}},
+			map[string]any{"source": "marked", "path": "^rules/"},
+		},
+	}
+	return writeConfig(t, document)
 }
 
 // The modes of linters.exclusions.generated, which say which generated files
