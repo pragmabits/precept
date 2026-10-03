@@ -43,6 +43,26 @@ func TestLanguage(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), analyzer, "language")
 }
 
+// TestImposed leaves out a name the language imposes, and a method that
+// implements an interface the package declares or imports, or error.
+func TestImposed(t *testing.T) {
+	analyzer := build(t, defcheck.Rule{
+		Pattern: "^(init|main|Error|String|MarshalJSON|Close|Get|Len|Less|Swap|Read)$",
+		Kinds:   []defcheck.Kind{defcheck.KindFunction, defcheck.KindMethod},
+	})
+	analysistest.Run(t, analysistest.TestData(), analyzer, "imposed", "program")
+}
+
+// TestTestFunctions leaves out a function go test runs, by its name and its
+// signature, in a test file.
+func TestTestFunctions(t *testing.T) {
+	analyzer := build(t, defcheck.Rule{
+		Pattern: "(?i)cfg|^Test$|^TestMain$",
+		Kinds:   []defcheck.Kind{defcheck.KindFunction, defcheck.KindMethod},
+	})
+	analysistest.Run(t, analysistest.TestData(), analyzer, "testfuncs")
+}
+
 func TestMessage(t *testing.T) {
 	analyzer := build(t,
 		defcheck.Rule{Pattern: "^cfg$", Message: "avoid the cfg abbreviation"},

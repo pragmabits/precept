@@ -1,5 +1,7 @@
 // Package defcheck reports a declaration whose name a configured pattern
-// forbids for its kind of declaration, at the identifier that declares it.
+// forbids for its kind of declaration, at the identifier that declares it. A
+// name the code did not choose, which the language, go test or an interface
+// imposes, is not reported.
 package defcheck
 
 import (
@@ -8,6 +10,7 @@ import (
 	"go/token"
 	"go/types"
 	"slices"
+	"sync"
 
 	"golang.org/x/tools/go/analysis"
 )
@@ -33,20 +36,30 @@ func New(config Config) (*analysis.Analyzer, error) {
 
 // check reports each declaration of the package for each rule that forbids
 // it, in the order of the source, and at one declaration in the order of the
-// rules.
+// rules, but a declaration whose name the code did not choose.
 func check(pass *analysis.Pass, prohibitions []prohibition) {
+	interfaces := sync.OnceValue(func() []*types.Interface {
+		return visible(pass.Pkg)
+	})
 	for _, current := range declarations(pass.TypesInfo) {
 		kind, found := kindOf(current.object)
 		if !found {
 			continue
 		}
+		var forbidding []prohibition
 		for _, rule := range prohibitions {
 			if rule.forbids(current.name, kind) {
-				pass.Report(analysis.Diagnostic{
-					Pos:     current.position,
-					Message: rule.diagnose(current.name, kind),
-				})
+				forbidding = append(forbidding, rule)
 			}
+		}
+		if len(forbidding) == 0 || imposed(pass.Fset, current.object, interfaces) {
+			continue
+		}
+		for _, rule := range forbidding {
+			pass.Report(analysis.Diagnostic{
+				Pos:     current.position,
+				Message: rule.diagnose(current.name, kind),
+			})
 		}
 	}
 }

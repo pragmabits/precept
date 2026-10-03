@@ -2,7 +2,9 @@ package names
 
 import "testing"
 
-func TestNewManager(t *testing.T) { // want `"TestNewManager" is forbidden by pattern "\(\?i\)manager\$" for function$`
+// TestNewManager is left out: go test runs it, and its name is not the
+// code's to choose.
+func TestNewManager(t *testing.T) {
 	cfg := NewManager("test").cfg // want `"cfg" is forbidden: avoid the cfg abbreviation$`
 	if cfg != "test" {
 		t.Fail()
