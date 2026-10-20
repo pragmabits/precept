@@ -8,7 +8,7 @@ allow, and shown before any of it is written. Decided by the developer.
 Before a line of code, and before an answer about the project, read what it
 rests on: the code the step touches and what calls it, these rules, the PRDs
 under `.local/docs/prds/`, the latest session reports under
-`.claude/sessions/`, and whatever else is available.
+`.harness/sessions/`, and whatever else is available.
 
 An answer about the project rests on something concrete in it: a file and a
 line, a decision in a PRD, a measurement run in the session. What was not read

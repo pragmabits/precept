@@ -15,7 +15,7 @@ The project's rules are in `.claude/rules/` and are loaded with this file. The
 PRDs are in `.local/docs/prds/`, in Portuguese and outside version control:
 `ordering-obligations.md` (paircheck), `declaration-naming-policy.md`
 (defcheck) and `golangci-lint.md` (what native inclusion in golangci-lint
-requires). Handoff reports of earlier sessions are in `.claude/sessions/`.
+requires). Handoff reports of earlier sessions are in `.harness/sessions/`.
 
 ## Commands
 
