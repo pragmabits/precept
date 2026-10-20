@@ -12,6 +12,8 @@ var (
 	ErrNoPattern      = errors.New("rule has no pattern")
 	ErrInvalidPattern = errors.New("pattern is not a regular expression")
 	ErrUnknownKind    = errors.New("kind is not " + listed(every))
+	ErrMixedKinds     = errors.New("rule both names kinds and leaves kinds out")
+	ErrNoKindLeft     = errors.New("rule leaves out every kind")
 	ErrDuplicateRule  = errors.New("rule repeats the pattern, kinds and message of another rule")
 )
 
@@ -31,6 +33,7 @@ const (
 	KindResult        Kind = "result"
 	KindType          Kind = "type"
 	KindTypeParameter Kind = "type-parameter"
+	KindLabel         Kind = "label"
 )
 
 // every is each kind, in the order a rule's kinds are normalized to.
@@ -46,10 +49,12 @@ var every = []Kind{
 	KindResult,
 	KindType,
 	KindTypeParameter,
+	KindLabel,
 }
 
-// Rule forbids the names Pattern matches in the declarations of Kinds, every
-// kind when it names none. Message, when written, replaces the pattern and the
+// Rule forbids the names Pattern matches in the declarations of Kinds: the
+// kinds it names, or every kind but those it writes after a -, and every kind
+// when it writes none. Message, when written, replaces the pattern and the
 // kind in the diagnostic.
 type Rule struct {
 	Pattern string `json:"pattern"`
@@ -102,19 +107,48 @@ func (c Config) compile() ([]prohibition, error) {
 }
 
 // normalize is the kinds written, each once, in the order of every. None
-// written is every kind.
+// written is every kind, and kinds each written after a - are every kind but
+// those, refused when they are every kind.
 func normalize(written []Kind) ([]Kind, error) {
 	if len(written) == 0 {
 		return slices.Clone(every), nil
 	}
+	named, leftOut, err := partition(written)
+	if err != nil {
+		return nil, err
+	}
+	kinds := slices.DeleteFunc(slices.Clone(every), func(kind Kind) bool {
+		if len(named) > 0 {
+			return !slices.Contains(named, kind)
+		}
+		return slices.Contains(leftOut, kind)
+	})
+	if len(kinds) == 0 {
+		return nil, ErrNoKindLeft
+	}
+	return kinds, nil
+}
+
+// partition splits written into the kinds it names and those it leaves out,
+// written after a -. A kind that is not one of every is refused, as written,
+// and so is a list that both names kinds and leaves kinds out.
+func partition(written []Kind) ([]Kind, []Kind, error) {
+	var named, leftOut []Kind
 	for _, kind := range written {
-		if !slices.Contains(every, kind) {
-			return nil, fmt.Errorf("%w: %q", ErrUnknownKind, string(kind))
+		name, isLeftOut := strings.CutPrefix(string(kind), "-")
+		if !slices.Contains(every, Kind(name)) {
+			return nil, nil, fmt.Errorf("%w: %q", ErrUnknownKind, string(kind))
+		}
+		if isLeftOut {
+			leftOut = append(leftOut, Kind(name))
+		} else {
+			named = append(named, Kind(name))
 		}
 	}
-	return slices.DeleteFunc(slices.Clone(every), func(kind Kind) bool {
-		return !slices.Contains(written, kind)
-	}), nil
+	if len(named) > 0 && len(leftOut) > 0 {
+		return nil, nil, fmt.Errorf("%w: %q and %q", ErrMixedKinds, named[0], "-"+leftOut[0])
+	}
+	return named, leftOut, nil
 }
 
 // listed is kinds as a sentence lists them: "a, b or c".

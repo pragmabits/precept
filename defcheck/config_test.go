@@ -37,6 +37,24 @@ func TestNewRefusesInvalidConfig(t *testing.T) {
 			rules:  []defcheck.Rule{{Pattern: "cfg", Kinds: []defcheck.Kind{"Local-Var"}}},
 		},
 		{
+			defect: "unknown kind left out",
+			want:   defcheck.ErrUnknownKind,
+			rules:  []defcheck.Rule{{Pattern: "cfg", Kinds: []defcheck.Kind{"-variable"}}},
+		},
+		{
+			defect: "kinds named and left out",
+			want:   defcheck.ErrMixedKinds,
+			rules: []defcheck.Rule{{
+				Pattern: "cfg",
+				Kinds:   []defcheck.Kind{defcheck.KindFunction, "-" + defcheck.KindLabel},
+			}},
+		},
+		{
+			defect: "every kind left out",
+			want:   defcheck.ErrNoKindLeft,
+			rules:  []defcheck.Rule{{Pattern: "cfg", Kinds: leftOut(every()...)}},
+		},
+		{
 			defect: "duplicate rule",
 			want:   defcheck.ErrDuplicateRule,
 			rules: []defcheck.Rule{
@@ -64,6 +82,22 @@ func TestNewRefusesInvalidConfig(t *testing.T) {
 			defect: "duplicate kinds left out",
 			want:   defcheck.ErrDuplicateRule,
 			rules:  []defcheck.Rule{{Pattern: "cfg"}, {Pattern: "cfg", Kinds: every()}},
+		},
+		{
+			defect: "duplicate kinds named and left out",
+			want:   defcheck.ErrDuplicateRule,
+			rules: []defcheck.Rule{
+				{Pattern: "cfg", Kinds: every()[1:]},
+				{Pattern: "cfg", Kinds: leftOut(defcheck.KindFunction)},
+			},
+		},
+		{
+			defect: "duplicate kinds left out twice",
+			want:   defcheck.ErrDuplicateRule,
+			rules: []defcheck.Rule{
+				{Pattern: "cfg", Kinds: leftOut(defcheck.KindLabel)},
+				{Pattern: "cfg", Kinds: leftOut(defcheck.KindLabel, defcheck.KindLabel)},
+			},
 		},
 	}
 	for _, test := range tests {
@@ -104,6 +138,7 @@ func TestNewAcceptsRulesThatDiffer(t *testing.T) {
 		{Pattern: "cfg", Kinds: []defcheck.Kind{defcheck.KindField}},
 		{Pattern: "^cfg$"},
 		{Pattern: "cfg", Kinds: every()[1:]},
+		{Pattern: "cfg", Kinds: leftOut(defcheck.KindLabel)},
 	}
 	if _, err := defcheck.New(defcheck.Config{Rules: rules}); err != nil {
 		t.Errorf("New() error = %v, want nil", err)
@@ -118,6 +153,25 @@ func TestNewAcceptsEveryKind(t *testing.T) {
 				t.Errorf("New() error = %v, want nil", err)
 			}
 		})
+	}
+}
+
+func TestNewAcceptsEveryKindLeftOut(t *testing.T) {
+	for _, kind := range every() {
+		t.Run(string(kind), func(t *testing.T) {
+			rule := defcheck.Rule{Pattern: "cfg", Kinds: leftOut(kind)}
+			if _, err := defcheck.New(defcheck.Config{Rules: []defcheck.Rule{rule}}); err != nil {
+				t.Errorf("New() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestNewQuotesTheKindAsWritten(t *testing.T) {
+	config := defcheck.Config{Rules: []defcheck.Rule{{Pattern: "cfg", Kinds: leftOut("variable")}}}
+	_, err := defcheck.New(config)
+	if err == nil || !strings.HasSuffix(err.Error(), `: "-variable"`) {
+		t.Errorf("New() error = %v, want one ending in %q", err, `: "-variable"`)
 	}
 }
 
@@ -166,5 +220,15 @@ func every() []defcheck.Kind {
 		defcheck.KindResult,
 		defcheck.KindType,
 		defcheck.KindTypeParameter,
+		defcheck.KindLabel,
 	}
+}
+
+// leftOut is kinds, each written after a -, as a rule leaves a kind out.
+func leftOut(kinds ...defcheck.Kind) []defcheck.Kind {
+	written := make([]defcheck.Kind, 0, len(kinds))
+	for _, kind := range kinds {
+		written = append(written, "-"+kind)
+	}
+	return written
 }

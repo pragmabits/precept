@@ -13,9 +13,9 @@ var variables = map[types.VarKind]Kind{
 }
 
 // kindOf is the kind of declaration object is, or false when it is of no kind
-// a rule applies to: a package name, a label, or a field embedded without a
-// name of its own. A function whose signature has a receiver is a method,
-// that of an interface included.
+// a rule applies to: the name an import gives a package, or a field embedded
+// without a name of its own. A function whose signature has a receiver is a
+// method, that of an interface included.
 func kindOf(object types.Object) (Kind, bool) {
 	switch typed := object.(type) {
 	case *types.Func:
@@ -36,6 +36,8 @@ func kindOf(object types.Object) (Kind, bool) {
 			return KindTypeParameter, true
 		}
 		return KindType, true
+	case *types.Label:
+		return KindLabel, true
 	}
 	return "", false
 }

@@ -30,6 +30,35 @@ type mgrState int // want `"mgrState" is forbidden by pattern "\^mgr" for type$`
 
 const mgrLimit mgrState = 3 // want `"mgrLimit" is forbidden by pattern "\^mgr" for constant$`
 
+// Negative is the first negative value of rows, or 0.
+func Negative(rows [][]int) int {
+	found := 0
+mgrRows: // want `"mgrRows" is forbidden by pattern "\^mgr" for label$`
+	for _, row := range rows {
+		for _, value := range row {
+			if value < 0 {
+				found = value
+				break mgrRows
+			}
+		}
+	}
+	return found
+}
+
+// Attempts counts the attempts of a retry, up to limit. The loop rule leaves
+// labels out.
+func Attempts(limit int) int {
+	count := 0
+retryLoop:
+	for innerLoop := range limit { // want `"innerLoop" is forbidden by pattern "\(\?i\)loop\$" for local-var$`
+		count++
+		if innerLoop == 2 {
+			break retryLoop
+		}
+	}
+	return count
+}
+
 func Count() int {
 	manager := cacheManager
 	service := NewManager("count")

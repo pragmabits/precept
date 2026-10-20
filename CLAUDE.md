@@ -120,8 +120,10 @@ golangci-lint accepts linters, not detectors.
 
 - `config.go` decodes `Config`, `Rule` and `Kind`, and compiles each rule into
   a `prohibition` (`prohibition.go`): the pattern through `regexp.Compile`,
-  the kinds normalized (none written is every kind, a repeated one counts
-  once), and a rule with the pattern, kinds and message of another refused.
+  the kinds normalized (none written is every kind, those written after a `-`
+  are every kind but them, a repeated one counts once, and a list that both
+  names and leaves out kinds, or leaves out every kind, is refused), and a
+  rule with the pattern, kinds and message of another refused.
   `New(Config)` refuses an invalid configuration before any analysis.
 - `defcheck.go` takes every name the package declares from
   `TypesInfo.Defs`, and the variable of a type switch from
@@ -135,7 +137,9 @@ golangci-lint accepts linters, not detectors.
   what an import imports depends on how the driver loaded it.
 - `classify.go` turns a `types.Object` into a `Kind`: a `*types.Var` by
   `Var.Kind()`, a `*types.TypeName` of a `*types.TypeParam` as
-  `type-parameter`. A package name, a label and an embedded field have none.
+  `type-parameter`, and a `*types.Label` as `label`. The name an import gives
+  a package and an embedded field have none, and the name of the package
+  clause never reaches it: `Defs` gives it no object.
 - It has no `Requires` and no fact, and never fails a pass.
 
 ### `internal/driver/`, what the commands share
@@ -353,7 +357,9 @@ and `key`, which tells a duplicate apart → where `forbids` or `diagnose`
 reads it; the README keys table; `defcheck.example.yml` and the defcheck
 settings of `golangci.example.yml`; the PRD §7 block; an `e2e` rule and case.
 A new kind is a `Kind` constant, its place in `every`, a case of `kindOf`, a
-row of the README kinds table and the PRD §6 list. `encoding/json` matches keys
+row of the README kinds table and the PRD §6 list; the `every()` of
+`config_test.go` and the text of the `kind.yml` refusal in `e2e/e2e_test.go`,
+which list every kind, change with it. `encoding/json` matches keys
 case-insensitively, so only a hyphenated key (`defer-first`) can fail a decode
 test before its tag exists.
 

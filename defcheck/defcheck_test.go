@@ -25,6 +25,14 @@ func TestOutsideEveryKind(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), analyzer, "outside")
 }
 
+func TestLabels(t *testing.T) {
+	analyzer := build(t,
+		defcheck.Rule{Pattern: "cfg"},
+		defcheck.Rule{Pattern: "^retry", Kinds: []defcheck.Kind{defcheck.KindLocalVar}},
+	)
+	analysistest.Run(t, analysistest.TestData(), analyzer, "labels")
+}
+
 func TestBlank(t *testing.T) {
 	analyzer := build(t, defcheck.Rule{Pattern: "^_$|^named$"})
 	analysistest.Run(t, analysistest.TestData(), analyzer, "blank")
@@ -36,6 +44,11 @@ func TestSelectedKinds(t *testing.T) {
 		defcheck.Rule{Pattern: "^nothing$"},
 	)
 	analysistest.Run(t, analysistest.TestData(), analyzer, "selected")
+}
+
+func TestNegatedKinds(t *testing.T) {
+	analyzer := build(t, defcheck.Rule{Pattern: "cfg", Kinds: []defcheck.Kind{"-local-var"}})
+	analysistest.Run(t, analysistest.TestData(), analyzer, "negated")
 }
 
 func TestLanguage(t *testing.T) {

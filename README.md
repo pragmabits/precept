@@ -571,7 +571,7 @@ name in any case.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `pattern` | required | The names the rule forbids. |
-| `kinds` | every kind | The kinds of declaration the rule applies to. |
+| `kinds` | every kind | The kinds of declaration the rule applies to, or, each written after a `-`, those it leaves out. |
 | `message` | none | Said in the diagnostic in place of the pattern and the kind. The name is always said. |
 
 A kind is what [`go/types`](https://pkg.go.dev/go/types) makes of the object
@@ -590,6 +590,10 @@ a declaration defines:
 | `result` | a named result | `*types.Var`, `ResultVar` |
 | `type` | `type T …`, and an alias, `type T = U` | `*types.TypeName` |
 | `type-parameter` | `T` in `[T any]`, of a function, a type or the receiver of a method | `*types.TypeName` of a `*types.TypeParam` |
+| `label` | `L:` before a statement, which `break`, `continue` and `goto` name | `*types.Label` |
+
+A kind written after a `-` is left out: `kinds: [-label]` is every kind but
+`label`. A rule's `kinds` either names kinds or leaves kinds out, never both.
 
 The diagnostic names the pattern and the kind, or says the rule's message:
 
@@ -601,9 +605,11 @@ declaration name "cfg" is forbidden: avoid the cfg abbreviation
 A declaration is reported once for each rule that forbids it, in the order
 the rules are written. A configuration is refused before any package is
 analyzed when a pattern is empty or does not compile, when a kind is not one of
-the table, and when a rule has the pattern, the kinds and the message of
-another: the kinds are compared as a set, so their order, a kind written twice
-and `kinds` left out, which is every kind, do not tell two rules apart.
+the table, when a rule both names kinds and leaves kinds out, or leaves out
+every kind, and when a rule has the pattern, the kinds and the message of
+another: the kinds are compared as a set, so their order, a kind written twice,
+`kinds` left out, which is every kind, and kinds left out, which are the
+others, do not tell two rules apart.
 
 `defcheck.example.yml` and `golangci.example.yml`, at the root of this
 repository, carry these rules with every key written: in the command's own
@@ -620,9 +626,14 @@ format and as golangci-lint settings.
   declared by `Push`.
 - `_` declares nothing, and neither does a field embedded without a name of
   its own: `*http.Client` in a struct is not a field named `Client`.
-- A renamed import, `import cfg "example.com/config"`, and a label are not
-  kinds of declaration. revive's `import-alias-naming`, with its `denyRegex`,
-  forbids patterns in import names.
+- A renamed import, `import cfg "example.com/config"`, is not a kind of
+  declaration. revive's `import-alias-naming`, with its `denyRegex`, forbids
+  patterns in import names.
+- The name in the package clause, `package cfg`, is not reported:
+  `types.Info.Defs` gives it no object. revive's `package-naming` forbids the
+  names in its `user-defined-bad-names`, each compared whole and in any case,
+  and its `convention-name-check-regex` is a pattern every package name must
+  match.
 - A name the code did not choose is left out:
   - `init`, and `main` in package `main`, which the language runs;
   - in a `_test.go` file, a function `go test` runs, by its name and its

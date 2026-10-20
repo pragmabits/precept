@@ -10,3 +10,6 @@ rules:
     kinds: [package-var, field, function, method]
 
   - pattern: '^mgr'
+
+  - pattern: '(?i)loop$'
+    kinds: [-label]

@@ -1,7 +1,7 @@
 # The rules of defcheck in its own format, with every key of a rule written:
 # `message` at its default in the second rule, where the diagnostic names the
-# pattern and the kind. `kinds` left empty, or out, is every kind. The README
-# describes every key under Rules.
+# pattern and the kind. `kinds` left empty, or out, is every kind, and a kind
+# written after a `-` is left out. The README describes every key under Rules.
 #
 #   defcheck -c defcheck.example.yml ./...
 rules:

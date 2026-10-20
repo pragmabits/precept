@@ -261,7 +261,7 @@ var defcheckRefusals = []refusal{
 	{
 		file: "testdata/defcheck/refused/kind.yml",
 		want: `rule 0: kind is not function, method, package-var, local-var, constant, field, ` +
-			`parameter, receiver, result, type or type-parameter: "variable"`,
+			`parameter, receiver, result, type, type-parameter or label: "variable"`,
 	},
 	{
 		file: "testdata/defcheck/refused/duplicate.yml",
