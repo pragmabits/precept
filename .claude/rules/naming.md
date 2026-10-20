@@ -99,7 +99,10 @@ would refuse every one.
 
 **Known blind spots.** Nothing verifies that a name is a word: no linter carries
 a dictionary, and a denylist is reactive by nature — `conn` only gets listed
-after somebody writes `conn`. And `forbidigo` reads usage sites only, so a
+after somebody writes `conn`. And `forbidigo` skips the names that a `func`,
+`var`, `const`, `type`, field, interface method or import declares, so a
 forbidden abbreviation in a struct field is reported at every read of it and
-never at the line that declares it. Nothing checks that a type parameter is one
-capital letter either: review is what carries the convention.
+never at the line that declares it; a `:=`, a `range` variable, a label and
+the package clause it reports where they are declared. Nothing checks that a
+type parameter is one capital letter either: review is what carries the
+convention.

@@ -11,12 +11,15 @@
 # written before a rule existed; if the gate ever needs to be green before that
 # debt is paid, drop the rule from `enable` rather than loosening it.
 #
-# forbidigo does not inspect a *declaration*: it only ever sees usage
-# sites, which is an explicit choice by its maintainer as of v1.6.0
+# forbidigo skips the names that a func, var, const, type, field, interface
+# method or import declares, the parameters, results and receiver of a func
+# included, which is an explicit choice by its maintainer as of v1.6.0
 # (changelog: "Don't check names in declarations"), not a bug. So a
-# forbidden abbreviation is caught where it is called and missed where it is
-# introduced: a struct field carrying one is reported at every read of it and
-# never at the line that declares it.
+# forbidden abbreviation in one of them is caught where it is used and missed
+# where it is introduced: a struct field carrying one is reported at every
+# read of it and never at the line that declares it. A name declared by :=,
+# a range variable, a label and the package clause are not skipped, and are
+# reported where they are declared too (measured with forbidigo v2.3.1).
 #
 # Every exclusion below names the reason it exists. An exclusion without a
 # reason is indistinguishable from the rule never having been enabled.
